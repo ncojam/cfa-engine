@@ -3,7 +3,7 @@ PROGNAME = contra_force_advance
 
 # Toolchain (devkitARM). Переопределяемо через переменные окружения,
 # например: make CXX=arm-none-eabi-g++
-CXX      ?= arm-none-eabi-g++
+CXX      := arm-none-eabi-g++
 OBJCOPY  ?= arm-none-eabi-objcopy
 GBAFIX   ?= gbafix
 
@@ -16,12 +16,18 @@ PARAMS += -fomit-frame-pointer -ffast-math -fno-rtti -fno-exceptions
 PARAMS += -mthumb -mthumb-interwork -g0 -O2
 PARAMS += -Iout -I..
 
-# Выделяем из .cpp файлов в src/ чистый список имён модулей без путей и расширений
-MODULES = $(patsubst %.cpp,%,$(notdir $(wildcard src/*.cpp)))
-# Подготавливаем списки модулей по типам, добавляя имя подпапок впереди и расширения в конце
-MODULES_CPP = $(addsuffix .cpp,$(addprefix src/,$(MODULES)))
-MODULES_O = $(addsuffix .o,$(addprefix out/,$(MODULES)))
-MODULES_DEP = $(addsuffix .dep,$(addprefix out/,$(MODULES)))
+# Список папок с исходниками (как в исходном Windows-Makefile)
+SRC_DIRS = src src/music src/player src/npc
+INCLUDES = -Isrc -Isrc/music -Isrc/player
+
+# Собираем ВСЕ .cpp файлы с путями из всех SRC_DIRS
+MODULES_CPP = $(foreach dir,$(SRC_DIRS),$(wildcard $(dir)/*.cpp))
+# Объектные файлы: меняем src/xxx.cpp на out/xxx.o (сохраняя подпапки)
+MODULES_O = $(patsubst src/%.cpp,out/%.o,$(MODULES_CPP))
+MODULES_DEP = $(patsubst %.o,%.dep,$(MODULES_O))
+
+# Правило поиска .cpp во всех подпапках
+vpath %.cpp $(SRC_DIRS)
 
 .PHONY: all dep clean
 all: $(PROGNAME).gba
@@ -31,19 +37,20 @@ $(PROGNAME).gba: out/$(PROGNAME).elf
 	$(GBAFIX) $(PROGNAME).gba
 
 out/$(PROGNAME).elf: $(MODULES_O)
-	$(CXX) $(PARAMS) $(MODULES_O) -o out/$(PROGNAME).elf
+	$(CXX) $(PARAMS) $(INCLUDES) $(MODULES_O) -o out/$(PROGNAME).elf
 
-out/%.o: src/%.cpp | out
-	$(CXX) $(PARAMS) -o $@ -c $<
-
-out: ; mkdir -p out
+out/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(PARAMS) $(INCLUDES) -o $@ -c $<
 
 dep: $(MODULES_DEP)
 
-out/%.dep: src/%.cpp | out
-	$(CXX) -MT $(patsubst %.dep,%.o,$@) -MM $(PARAMS) $< > $@
+out/%.dep: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) -MT $(patsubst %.dep,%.o,$@) -MM $(PARAMS) $(INCLUDES) $< > $@
 
 -include $(MODULES_DEP)
 
 clean:
-	rm -f out/*.elf out/*.dep out/*.o out/*.s out/*.inc
+	rm -f $(MODULES_O) $(MODULES_DEP)
+	rm -f out/$(PROGNAME).elf $(PROGNAME).gba

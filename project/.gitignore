@@ -1,0 +1,15 @@
+*.psd
+*.gba
+out/
+*HQ.wav
+sounds/oldMusic/
+sounds/raw/
+sounds/skate/old/
+images/*.act
+*.rar
+*.zip
+*.ini
+*.log
+commit_msg.txt
+sounds/convert/
+*.sgm

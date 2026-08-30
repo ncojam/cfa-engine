@@ -634,8 +634,11 @@ int main( int argc, char *argv[] )
 
 	fclose( f );
 	f = NULL;
-	fclose( fout );
-	fout = NULL;
+	if ( fout )
+	{
+		fclose( fout );
+		fout = NULL;
+	};
 
 	goto quit;
 
