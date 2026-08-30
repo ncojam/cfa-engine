@@ -6,6 +6,7 @@ project/src/
 project/images/
 project/resources/
 project/sounds/
+project/*
 
 # ==========================================================================
 # Артефакты сборки
