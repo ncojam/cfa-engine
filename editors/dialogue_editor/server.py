@@ -1,0 +1,434 @@
+#!/usr/bin/env python3
+"""
+Graveblood — Dialogue Editor (local web server, Python 3 stdlib only)
+
+    python3 server.py              # http://127.0.0.1:8765  (opens the browser)
+    python3 server.py --port 9000 --no-browser
+    python3 server.py --project /cfa_engine/project
+
+By default the project is located relative to this file: <editor>/../../project
+Reads/writes  <project>/src/dialogues.cpp  and  <project>/src/dialogues.h
+Backups go to <editor>/backups/ before every save.
+Editor-only data (statuses, NPC per dialogue, emotion names) -> <editor>/editor_meta.json
+"""
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import struct
+import sys
+import threading
+import time
+import webbrowser
+import zlib
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import dlgcore  # noqa: E402
+
+LOCK = threading.Lock()
+CFG = {}
+
+
+# ------------------------------------------------------------------ files
+
+def read_text(path):
+    with open(path, 'rb') as fh:
+        data = fh.read()
+    for enc in ('utf-8', 'cp1251'):
+        try:
+            return data.decode(enc), enc, data
+        except UnicodeDecodeError:
+            continue
+    return data.decode('latin-1'), 'latin-1', data
+
+
+def write_text(path, text, enc):
+    tmp = path + '.tmp_editor'
+    with open(tmp, 'wb') as fh:
+        fh.write(text.encode(enc))
+    os.replace(tmp, path)
+
+
+def files_hash():
+    h = hashlib.sha1()
+    for p in (CFG['cpp'], CFG['h']):
+        with open(p, 'rb') as fh:
+            h.update(fh.read())
+    return h.hexdigest()
+
+
+def backup():
+    bdir = os.path.join(HERE, 'backups')
+    os.makedirs(bdir, exist_ok=True)
+    stamp = time.strftime('%Y%m%d_%H%M%S')
+    for p in (CFG['cpp'], CFG['h']):
+        base = os.path.basename(p)
+        shutil.copy2(p, os.path.join(bdir, '%s.%s' % (stamp, base)))
+    # keep the newest N backup pairs
+    files = sorted(os.listdir(bdir))
+    keep = CFG.get('keep_backups', 40) * 2
+    for old in files[:-keep] if len(files) > keep else []:
+        try:
+            os.remove(os.path.join(bdir, old))
+        except OSError:
+            pass
+
+
+def meta_path():
+    return os.path.join(HERE, 'editor_meta.json')
+
+
+def load_meta():
+    try:
+        with open(meta_path(), encoding='utf-8') as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {"dialogues": {}, "emotions": {}}
+
+
+def save_meta(meta):
+    tmp = meta_path() + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as fh:
+        json.dump(meta, fh, ensure_ascii=False, indent=1, sort_keys=True)
+    os.replace(tmp, meta_path())
+
+
+# ------------------------------------------------------------------ portraits
+
+PORTRAIT_W, PORTRAIT_H = 72, 80
+INC_INDEX = {}      # "char00.til.inc" -> path
+PORTRAIT_CACHE = {}  # cid -> (tiles bytes, palette list) or None
+
+
+def index_inc_files():
+    INC_INDEX.clear()
+    roots = CFG['gfx_dirs']
+    for root in roots:
+        for dp, dns, fns in os.walk(root):
+            dns[:] = [d for d in dns if not d.startswith('.') and d not in ('backups', 'node_modules')]
+            for fn in fns:
+                if re.fullmatch(r'char\d\d\.(til|pal)\.inc', fn, re.I):
+                    INC_INDEX.setdefault(fn.lower(), os.path.join(dp, fn))
+
+
+def parse_inc_array(path, ident):
+    src, _, _ = read_text(path)
+    m = re.search(r'([\w\s]*?)\b' + re.escape(ident) + r'\s*\[[^\]]*\][^={;]*=\s*\{', src)
+    if not m:
+        m = re.search(r'([\w\s]*?)\b\w+\s*\[[^\]]*\][^={;]*=\s*\{', src)
+        if not m:
+            return None, None
+    decl = m.group(1)
+    start = m.end()
+    end = src.find('}', start)
+    body = re.sub(r'//[^\n]*|/\*.*?\*/', '', src[start:end], flags=re.S)
+    nums = [int(x, 0) for x in re.findall(r'0[xX][0-9a-fA-F]+|\d+', body)]
+    width = 1
+    if re.search(r'\b(int|long|u32|uint32_t)\b', decl) and 'short' not in decl:
+        width = 4
+    elif re.search(r'\b(short|u16|uint16_t)\b', decl):
+        width = 2
+    elif nums and max(nums) > 0xFFFF:
+        width = 4
+    elif nums and max(nums) > 0xFF:
+        width = 2
+    return nums, width
+
+
+def load_portrait(cid):
+    if cid in PORTRAIT_CACHE:
+        return PORTRAIT_CACHE[cid]
+    res = None
+    til = INC_INDEX.get('char%02d.til.inc' % cid)
+    pal = INC_INDEX.get('char%02d.pal.inc' % cid)
+    if til and pal:
+        try:
+            tnums, tw = parse_inc_array(til, 'char%02d_til' % cid)
+            pnums, pw = parse_inc_array(pal, 'char%02d_pal' % cid)
+            if tnums and pnums:
+                if tw == 1:
+                    tb = bytes(x & 0xFF for x in tnums)
+                elif tw == 2:
+                    tb = b''.join(struct.pack('<H', x & 0xFFFF) for x in tnums)
+                else:
+                    tb = b''.join(struct.pack('<I', x & 0xFFFFFFFF) for x in tnums)
+                if pw == 4:  # two colours per word
+                    pv = []
+                    for x in pnums:
+                        pv += [x & 0xFFFF, (x >> 16) & 0xFFFF]
+                    pnums = pv
+                colors = []
+                for c in pnums:
+                    r, g, b = c & 31, (c >> 5) & 31, (c >> 10) & 31
+                    colors.append(((r << 3) | (r >> 2), (g << 3) | (g >> 2), (b << 3) | (b >> 2)))
+                res = (tb, colors)
+        except Exception as e:  # noqa: BLE001
+            print('portrait %d: %s' % (cid, e))
+    PORTRAIT_CACHE[cid] = res
+    return res
+
+
+def emotion_count(cid):
+    p = load_portrait(cid)
+    if not p:
+        return 0
+    tiles = len(p[0]) // 64
+    # an emotion needs tiles 96n+16 .. 96n+16+72
+    return max(0, (tiles - 16 - 72) // 96 + 1)
+
+
+# Placement copied from makePrtrt() + PlayerDrawing::drawChar():
+#   dest tile d (0..71)  <- src tile 96n+16+d ;  dest 80..87 <- src 96n+96+(d-80)
+#   OBJ VRAM is 2D, 16 8bpp tiles per row.
+def _placements():
+    out = []
+    t = 8  # loop 1: 4x2 sprites 16x16, cols 8..15 rows 0..3  -> x 0..64, y 48..80
+    for yy in (0, 2):
+        for xx in (0, 2, 4, 6):
+            out += [(t, xx * 8, yy * 8 + 48), (t + 1, xx * 8 + 8, yy * 8 + 48),
+                    (t + 16, xx * 8, yy * 8 + 56), (t + 17, xx * 8 + 8, yy * 8 + 56)]
+            t += 2
+        t += 24
+    t = 0  # loop 2: 3x3 sprites 16x16, cols 0..5 rows 0..5 -> x 8..56, y 0..48
+    for yy in (0, 2, 4):
+        for xx in (0, 2, 4):
+            out += [(t, xx * 8 + 8, yy * 8), (t + 1, xx * 8 + 16, yy * 8),
+                    (t + 16, xx * 8 + 8, yy * 8 + 8), (t + 17, xx * 8 + 16, yy * 8 + 8)]
+            t += 2
+        t += 26
+    t = 7  # loop 3: column 7, 5 tiles -> x 64, y 40..80
+    for yy in range(5):
+        out.append((t, 64, (yy + 5) * 8))
+        t += 16
+    t = 6  # loop 4: column 6, 6 tiles -> x 56, y 0..48
+    for yy in range(6):
+        out.append((t, 56, yy * 8))
+        t += 16
+    return out
+
+
+PLACEMENTS = _placements()
+
+
+def render_portrait(cid, emo):
+    p = load_portrait(cid)
+    if not p:
+        return None
+    tb, pal = p
+    W, H = PORTRAIT_W, PORTRAIT_H
+    px = bytearray(W * H * 4)
+    ntiles = len(tb) // 64
+    base = 96 * emo + 16
+    for dest, x0, y0 in PLACEMENTS:
+        src_tile = base + dest if dest < 72 else (96 * emo + 96 + (dest - 80) if 80 <= dest < 88 else -1)
+        if src_tile < 0 or src_tile >= ntiles:
+            continue
+        off = src_tile * 64
+        for y in range(8):
+            for x in range(8):
+                v = tb[off + y * 8 + x]
+                if v == 0 or v >= len(pal):
+                    continue
+                r, g, b = pal[v]
+                i = ((y0 + y) * W + (x0 + x)) * 4
+                px[i:i + 4] = bytes((r, g, b, 255))
+    return png_rgba(W, H, bytes(px))
+
+
+def png_rgba(w, h, rgba):
+    def chunk(t, d):
+        c = struct.pack('>I', len(d)) + t + d
+        return c + struct.pack('>I', zlib.crc32(t + d) & 0xFFFFFFFF)
+    raw = b''.join(b'\x00' + rgba[y * w * 4:(y + 1) * w * 4] for y in range(h))
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 6, 0, 0, 0)) +
+            chunk(b'IDAT', zlib.compress(raw, 9)) + chunk(b'IEND', b''))
+
+
+# ------------------------------------------------------------------ API
+
+def load_font():
+    """font[] from sys8.font.h (same table BubbleGum::setFont(font) uses)."""
+    cand = os.path.join(os.path.dirname(CFG['cpp']), 'sys8.font.h')
+    if not os.path.isfile(cand):
+        cand = None
+        for dp, dns, fns in os.walk(CFG['project']):
+            dns[:] = [d for d in dns if not d.startswith('.')]
+            if 'sys8.font.h' in fns:
+                cand = os.path.join(dp, 'sys8.font.h')
+                break
+    if not cand:
+        return None
+    with open(cand, 'rb') as fh:
+        src = fh.read().decode('latin-1')
+    m = re.search(r'\bfont\s*\[\s*\]\s*=\s*\{(.*?)\};', src, re.S)
+    if not m:
+        return None
+    body = re.sub(r'//[^\n]*|/\*.*?\*/', '', m.group(1), flags=re.S)
+    return [int(x, 0) for x in re.findall(r'0[xX][0-9a-fA-F]+|\d+', body)]
+
+
+def api_load():
+    cpp, _, _ = read_text(CFG['cpp'])
+    model = dlgcore.load_model(cpp)
+    chars = []
+    pers = os.path.join(os.path.dirname(CFG['cpp']), 'persons.cpp')
+    if os.path.exists(pers):
+        chars = dlgcore.parse_characters(read_text(pers)[0])
+    portraits = {}
+    for cid in range(max(len(chars), 40)):
+        n = emotion_count(cid)
+        if n:
+            portraits[cid] = n
+    return {
+        "model": model,
+        "hash": files_hash(),
+        "characters": chars,
+        "portraits": portraits,
+        "meta": load_meta(),
+        "font": load_font(),
+        "paths": {"cpp": CFG['cpp'], "h": CFG['h'], "gfx": CFG['gfx_dirs'],
+                  "incFound": len(INC_INDEX)},
+        "limits": {str(k): v for k, v in dlgcore.STR_LIMITS.items()},
+    }
+
+
+def api_save(body):
+    if body.get('hash') != files_hash() and not body.get('force'):
+        return 409, {"error": "Файлы диалогов изменились на диске после загрузки. "
+                              "Перезагрузите или сохраните принудительно."}
+    cpp, enc_c, _ = read_text(CFG['cpp'])
+    h, enc_h, _ = read_text(CFG['h'])
+    new_cpp, new_h = dlgcore.save_model(cpp, h, body['model'])
+    changed = (new_cpp != cpp) or (new_h != h)
+    if changed:
+        backup()
+        if new_cpp != cpp:
+            write_text(CFG['cpp'], new_cpp, enc_c)
+        if new_h != h:
+            write_text(CFG['h'], new_h, enc_h)
+    # return the freshly parsed model so raw texts / spans are in sync
+    model = dlgcore.load_model(new_cpp)
+    return 200, {"ok": True, "changed": changed, "hash": files_hash(), "model": model}
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = 'GBDialogueEditor/1.0'
+
+    def log_message(self, fmt, *args):
+        if CFG.get('verbose'):
+            sys.stderr.write(fmt % args + '\n')
+
+    def _send(self, code, body, ctype='application/json; charset=utf-8'):
+        if isinstance(body, (dict, list)):
+            body = json.dumps(body, ensure_ascii=False).encode('utf-8')
+        elif isinstance(body, str):
+            body = body.encode('utf-8')
+        self.send_response(code)
+        self.send_header('Content-Type', ctype)
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _body(self):
+        n = int(self.headers.get('Content-Length') or 0)
+        return json.loads(self.rfile.read(n).decode('utf-8') or '{}')
+
+    def do_GET(self):
+        path = urlparse(self.path).path
+        try:
+            if path in ('/', '/index.html'):
+                return self._static('index.html')
+            if path.startswith('/static/'):
+                return self._static(path[len('/static/'):])
+            if path == '/api/load':
+                with LOCK:
+                    return self._send(200, api_load())
+            m = re.fullmatch(r'/api/portrait/(\d+)/(\d+)\.png', path)
+            if m:
+                with LOCK:
+                    png = render_portrait(int(m.group(1)), int(m.group(2)))
+                if png is None:
+                    return self._send(404, {"error": "no portrait"})
+                return self._send(200, png, 'image/png')
+            return self._send(404, {"error": "not found"})
+        except Exception as e:  # noqa: BLE001
+            import traceback
+            traceback.print_exc()
+            return self._send(500, {"error": str(e)})
+
+    def do_POST(self):
+        path = urlparse(self.path).path
+        try:
+            body = self._body()
+            with LOCK:
+                if path == '/api/save':
+                    code, res = api_save(body)
+                    return self._send(code, res)
+                if path == '/api/meta':
+                    save_meta(body)
+                    return self._send(200, {"ok": True})
+                if path == '/api/rescan':
+                    index_inc_files()
+                    PORTRAIT_CACHE.clear()
+                    return self._send(200, {"ok": True, "incFound": len(INC_INDEX)})
+            return self._send(404, {"error": "not found"})
+        except Exception as e:  # noqa: BLE001
+            import traceback
+            traceback.print_exc()
+            return self._send(500, {"error": str(e)})
+
+    def _static(self, rel):
+        rel = rel.replace('\\', '/')
+        full = os.path.normpath(os.path.join(HERE, 'static', rel))
+        if not full.startswith(os.path.join(HERE, 'static')) or not os.path.isfile(full):
+            return self._send(404, {"error": "not found"})
+        ext = os.path.splitext(full)[1].lower()
+        ctype = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+                 '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml'}.get(ext, 'application/octet-stream')
+        with open(full, 'rb') as fh:
+            return self._send(200, fh.read(), ctype)
+
+
+def main():
+    ap = argparse.ArgumentParser(description='Graveblood dialogue editor')
+    ap.add_argument('--project', default=os.path.normpath(os.path.join(HERE, '..', '..', 'project')),
+                    help='game project dir (default: <editor>/../../project)')
+    ap.add_argument('--gfx', action='append', default=None,
+                    help='dir(s) to search for charNN.til.inc / charNN.pal.inc (default: whole project)')
+    ap.add_argument('--host', default='127.0.0.1')
+    ap.add_argument('--port', type=int, default=8765)
+    ap.add_argument('--no-browser', action='store_true')
+    ap.add_argument('-v', '--verbose', action='store_true')
+    a = ap.parse_args()
+
+    CFG['project'] = a.project
+    CFG['cpp'] = os.path.join(a.project, 'src', 'dialogues.cpp')
+    CFG['h'] = os.path.join(a.project, 'src', 'dialogues.h')
+    CFG['gfx_dirs'] = a.gfx or [a.project]
+    CFG['verbose'] = a.verbose
+    for p in (CFG['cpp'], CFG['h']):
+        if not os.path.isfile(p):
+            sys.exit('Не найден файл: %s  (укажите --project)' % p)
+    index_inc_files()
+    url = 'http://%s:%d/' % (a.host, a.port)
+    print('Graveblood Dialogue Editor')
+    print('  dialogues : %s' % CFG['cpp'])
+    print('  portraits : %d .inc files found' % len(INC_INDEX))
+    print('  open      : %s   (Ctrl+C to stop)' % url)
+    srv = ThreadingHTTPServer((a.host, a.port), Handler)
+    if not a.no_browser:
+        threading.Timer(0.6, lambda: webbrowser.open(url)).start()
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        print('\nbye')
+
+
+if __name__ == '__main__':
+    main()

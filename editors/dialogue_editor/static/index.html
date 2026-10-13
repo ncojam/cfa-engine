@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Graveblood · Dialogues</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header id="topbar">
+  <button id="btnSidebar" class="icon-btn" title="Показать/скрыть панель (Ctrl+B)">☰</button>
+  <div class="brand">GRAVEBLOOD <span>dialogue editor</span></div>
+  <div id="crumbs"></div>
+  <div class="spacer"></div>
+  <span id="issuesBadge" class="badge" hidden></span>
+  <button id="btnPlay" class="btn" title="Прогнать текущий диалог">▶ Прогон</button>
+  <button id="btnUndo" class="icon-btn" title="Отменить (Ctrl+Z)">↶</button>
+  <button id="btnRedo" class="icon-btn" title="Повторить (Ctrl+Shift+Z)">↷</button>
+  <button id="btnSettings" class="icon-btn" title="Настройки">⚙</button>
+  <button id="btnReload" class="btn" title="Перечитать файлы с диска">⟳ С диска</button>
+  <button id="btnSave" class="btn primary" title="Сохранить в dialogues.cpp/.h (Ctrl+S)">Сохранить</button>
+</header>
+
+<div id="layout">
+  <aside id="sidebar">
+    <div class="side-tools">
+      <input id="search" type="search" placeholder="Поиск: текст, имя, d001_004…" autocomplete="off">
+      <div class="chips" id="statusFilter">
+        <button data-f="all" class="chip on">Все</button>
+        <button data-f="wip" class="chip">● В работе</button>
+        <button data-f="ok" class="chip">✓ OK</button>
+        <button data-f="none" class="chip">○ Без статуса</button>
+      </div>
+    </div>
+    <div id="tree"></div>
+    <div class="side-foot">
+      <button id="btnAddMission" class="btn small">+ миссия</button>
+      <button id="btnCollapseAll" class="btn small ghost">свернуть всё</button>
+    </div>
+    <div id="sideResizer" title="Потяните, чтобы изменить ширину"></div>
+  </aside>
+
+  <main id="main">
+    <div id="empty" class="empty">
+      <div class="empty-title">Выберите диалог в дереве слева</div>
+      <div class="empty-sub">Ctrl+S — сохранить · Ctrl+B — панель · Ctrl+Z — отмена · Alt+↑/↓ — соседний диалог</div>
+    </div>
+    <div id="editor" hidden></div>
+  </main>
+</div>
+
+<div id="popover" hidden></div>
+<div id="modal" hidden><div class="modal-box"></div></div>
+<div id="toasts"></div>
+
+<script src="/static/gba.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

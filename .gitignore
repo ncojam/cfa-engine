@@ -36,3 +36,8 @@ Thumbs.db
 *.swp
 .vscode/
 .idea/
+
+*.bmp
+editors/dialogue_editor/backups/
+__pycache__/
+*.pyc

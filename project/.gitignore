@@ -13,3 +13,7 @@ images/*.act
 commit_msg.txt
 sounds/convert/
 *.sgm
+*.kate-swp
+*.kra
+*.kra~
+*.bmp~
