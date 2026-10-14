@@ -272,6 +272,24 @@ def load_font():
     return [int(x, 0) for x in re.findall(r'0[xX][0-9a-fA-F]+|\d+', body)]
 
 
+def load_mission_order():
+    """Порядок прохождения миссий из src/mission_order.cpp (массив missionOrder[]).
+
+    Возвращает список ID миссий (индексы dPointers) или [], если файла нет.
+    Редактор только показывает миссии в этом порядке; dPointers не трогает.
+    """
+    path = os.path.join(os.path.dirname(CFG['cpp']), 'mission_order.cpp')
+    if not os.path.exists(path):
+        return []
+    src = read_text(path)[0]
+    m = re.search(r'missionOrder\s*\[\s*\d*\s*\]\s*=\s*\{(.*?)\}', src, re.S)
+    if not m:
+        return []
+    body = re.sub(r'//[^\n]*', '', m.group(1))
+    body = re.sub(r'/\*.*?\*/', '', body, flags=re.S)
+    return [int(x) for x in re.findall(r'-?\d+', body)]
+
+
 def api_load():
     cpp, _, _ = read_text(CFG['cpp'])
     model = dlgcore.load_model(cpp)
@@ -290,6 +308,7 @@ def api_load():
         "characters": chars,
         "portraits": portraits,
         "meta": load_meta(),
+        "order": load_mission_order(),
         "font": load_font(),
         "paths": {"cpp": CFG['cpp'], "h": CFG['h'], "gfx": CFG['gfx_dirs'],
                   "incFound": len(INC_INDEX)},

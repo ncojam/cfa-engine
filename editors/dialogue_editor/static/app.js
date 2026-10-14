@@ -230,6 +230,7 @@ async function loadAll(keepPos=true) {
   S.hash = j.hash; S.paths = j.paths;
   if (j.characters && j.characters.length) S.chars = j.characters;
   S.portraits = {}; for (const [k, v] of Object.entries(j.portraits || {})) S.portraits[+k] = v;
+  S.order = j.order || [];
   S.meta = j.meta || {}; S.meta.dialogues = S.meta.dialogues || {}; S.meta.emotions = S.meta.emotions || {};
   GBA.setFont(j.font); GBA.setColors(S.meta.gbaColors);
   if (!j.font) toast('sys8.font.h не найден — превью баблов без текста', 'err');
@@ -286,7 +287,20 @@ function select(name, scrollTo) {
   if (scrollTo != null) setTimeout(() => flashPhrase(scrollTo), 30);
   const row = $(`.d-row[data-name="${name}"]`); if (row) row.scrollIntoView({block:'nearest'});
 }
-function allDialogues() { return S.missions.flatMap(m => m.dialogues.map(D => ({ m, D }))); }
+// Миссии в порядке прохождения (src/mission_order.cpp → missionOrder[]).
+// Индекс в S.missions = ID миссии (= curMission, индекс dPointers) и при
+// сохранении не меняется; здесь меняется только порядок показа.
+// Миссии, которых нет в missionOrder, идут в конце по ID (pos = -1).
+function orderedMissions() {
+  const order = S.order || [];
+  const res = [], used = new Set();
+  order.forEach(id => {
+    if (id >= 0 && id < S.missions.length && !used.has(id)) { used.add(id); res.push({ m:S.missions[id], mi:id, pos:res.length }); }
+  });
+  S.missions.forEach((m, mi) => { if (!used.has(mi)) res.push({ m, mi, pos:-1 }); });
+  return res;
+}
+function allDialogues() { return orderedMissions().flatMap(({ m }) => m.dialogues.map(D => ({ m, D }))); }
 function stepDialogue(dir) {
   const list = visibleDialogues();
   if (!list.length) return;
@@ -472,15 +486,17 @@ function renderTree() {
   const tree = $('#tree'); tree.innerHTML = '';
   const filtering = S.search || S.filter !== 'all';
   let shown = 0;
-  const groups = S.missions.map((m, mi) => ({ m, mi })).concat(S.orphans.length ? [{ m:{ name:'orphans', title:'Не подключены к dPointers', dialogues:S.orphans }, mi:-1 }] : []);
-  for (const { m, mi } of groups) {
+  const hasOrder = (S.order || []).length > 0;
+  const groups = orderedMissions().concat(S.orphans.length ? [{ m:{ name:'orphans', title:'Не подключены к dPointers', dialogues:S.orphans }, mi:-1, pos:-1 }] : []);
+  for (const { m, mi, pos } of groups) {
     const ds = m.dialogues.filter(dialogueMatches);
     if (filtering && !ds.length) continue;
     const okN = m.dialogues.filter(d => statusOf(d.name) === 'ok').length;
     const open = filtering || S.open.has(m.name);
     const row = h('div', {class:'m-row' + (open ? ' open' : ''), title: m.title, onclick: () => { S.open.has(m.name) ? S.open.delete(m.name) : S.open.add(m.name); store.set('open', [...S.open]); renderTree(); }},
       h('span', {class:'tw'}, '▶'),
-      h('span', {class:'mid'}, mi >= 0 ? m.name : '—'),
+      hasOrder && mi >= 0 ? h('span', {class:'mpos', title: pos >= 0 ? `${pos + 1}-я по порядку прохождения (mission_order.cpp)` : 'Нет в missionOrder — в игре сюда не попасть'}, pos >= 0 ? (pos + 1) + '.' : '?') : null,
+      h('span', {class:'mid', title: mi >= 0 ? `ID миссии (curMission) = ${mi}` : ''}, mi >= 0 ? m.name : '—'),
       h('span', {class:'mt'}, m.title || (mi >= 0 ? 'Миссия ' + mi : '')),
       h('span', {class:'prog', title:`OK: ${okN} из ${m.dialogues.length}`}, h('i', {style:`width:${m.dialogues.length ? 100*okN/m.dialogues.length : 0}%`})),
       h('span', {class:'cnt'}, m.dialogues.length),
@@ -548,6 +564,7 @@ function addMission() {
   const m = { name, title, dialogues:[] };
   S.missions.push(m); S.open.add(name); S.structDirty = true;
   addDialogue(m);
+  if ((S.order || []).length) toast(`${name}: ID ${S.missions.length - 1}. Чтобы задать место в сюжете, впиши ${S.missions.length - 1} в missionOrder[] (src/mission_order.cpp)`);
 }
 
 // ============================================================ editor
