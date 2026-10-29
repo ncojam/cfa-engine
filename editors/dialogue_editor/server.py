@@ -309,15 +309,127 @@ def render_bmp_emotion(path, is_sheet, emo):
     return png_rgba(W, H, bytes(px))
 
 
+# ------------------------------------------------------------------ overworld sprites (one idle frame per character)
+# Как в движке: NPC-кадр 16x32 = тайлы (32 + legsColor*8 + subtype) + lin*16, 2 тайла в ширину, 4 строки
+# (ActorNPC::copyFrameGfx), с листа chr_spr[gfxFrom] (persons.cpp) или с gr_chars (mss-chars.bmp) при gfxFrom = -1.
+# Вика — vika00 (mss-vika00.bmp), idle: тайл 16 (player_drawing.cpp). Прозрачный цвет — (0,0) spr_palette.bmp.
+
+SPRITE_INFO = {"key": None, "chars": {}}
+
+
+def _src(name):
+    p = os.path.join(os.path.dirname(CFG['cpp']), name)
+    return read_text(p)[0] if os.path.isfile(p) else ''
+
+
+def _sprite_sheets():
+    """идентификатор tmx2incl (chr_spr_lidia, gr_chars, vika00) -> имя BMP, по build_graphics.sh"""
+    out = {}
+    for fn in ('build_graphics.sh', 'build_graphics.bat'):
+        p = os.path.join(CFG['project'], fn)
+        if os.path.isfile(p):
+            for m in re.finditer(r'\s+b\s+"?[^\s"]*?([\w.-]+\.bmp)"?\s+(\w+)', read_text(p)[0]):
+                out.setdefault(m.group(2), m.group(1))
+    out.setdefault('gr_chars', 'mss-chars.bmp')
+    out.setdefault('vika00', 'mss-vika00.bmp')
+    return out
+
+
+def _mission_npcs():
+    src = re.sub(r'//[^\n]*|/\*.*?\*/', '', _src('mission_objects.h'), flags=re.S)
+    res = []
+    for arr in re.finditer(r'\[\s*\]\s*=\s*\{(.*?)\};', src, re.S):
+        for ent in re.split(r'\bnullptr\b', arr.group(1)):
+            vals = re.findall(r'"((?:[^"\\]|\\.)*)"', ent)
+            d = dict(zip(vals[0::2], vals[1::2]))
+            try:
+                if 'charID' in d and 'legsColor' in d:
+                    res.append((int(d['charID']), int(d.get('gfxFrom', -1)), int(d['legsColor']), int(d.get('subtype', 0))))
+            except ValueError:
+                pass
+    return res
+
+
+def sprite_table():
+    files = [os.path.join(os.path.dirname(CFG['cpp']), f) for f in ('mission_objects.h', 'persons.cpp')]
+    key = tuple(os.path.getmtime(f) if os.path.isfile(f) else 0 for f in files)
+    if SPRITE_INFO['key'] == key:
+        return SPRITE_INFO['chars']
+    sheets = _sprite_sheets()
+    m = re.search(r'\bchr_spr\s*\[[^\]]*\]\s*=\s*\{(.*?)\};', _src('persons.cpp'), re.S)
+    chr_spr = re.findall(r'(\w+?)_til\b|\bnullptr\b', m.group(1)) if m else []
+    from collections import Counter
+    npcs = _mission_npcs()
+    # листы скейтеров (ActorSkater.cpp): линия 0 = 8 px, idle — линия 1 = тайл 16, legsColor не используется
+    skater = set(re.findall(r'\bsheet\s*=\s*(chr_spr_\w+?)_til', _src('ActorSkater.cpp')))
+    out = {0: {"sheet": sheets['vika00'], "tile": 16, "from": "Вика: основной тайлсет"}}
+    ids = {c for c, *_ in npcs} | {i for i, n in enumerate(chr_spr) if n and n != 'chr_spr_items'}
+    for cid in sorted(ids - {0}):
+        own = [(g, l, s) for c, g, l, s in npcs if c == cid and l != 1 and 0 <= g < len(chr_spr)
+               and chr_spr[g] and chr_spr[g] != 'chr_spr_items']
+        shared = [(l, s) for c, g, l, s in npcs if c == cid and l != 1 and g == -1]
+        if own:
+            (g, l, s), _ = Counter(own).most_common(1)[0]
+            out[cid] = {"sheet": sheets.get(chr_spr[g], chr_spr[g] + '.bmp'),
+                        "tile": 16 if chr_spr[g] in skater else 32 + l * 8 + s,
+                        "from": 'свой лист %s (gfxFrom %d)' % (chr_spr[g], g)}
+        elif cid < len(chr_spr) and chr_spr[cid] and chr_spr[cid] != 'chr_spr_items':
+            out[cid] = {"sheet": sheets.get(chr_spr[cid], chr_spr[cid] + '.bmp'), "tile": 16 if chr_spr[cid] in skater else 32,
+                        "from": 'свой лист %s (в mission_objects не найден, кадр 0)' % chr_spr[cid]}
+        elif shared:
+            (l, s), n = Counter(shared).most_common(1)[0]
+            out[cid] = {"sheet": sheets['gr_chars'], "tile": 32 + l * 8 + s,
+                        "from": 'общий лист, mission_objects: legsColor %d, subtype %d (%d раз)' % (l, s, n)}
+    SPRITE_INFO.update(key=key, chars=out)
+    return out
+
+
+def render_sprite(cid):
+    info = sprite_table().get(cid)
+    if not info:
+        return None
+    path = os.path.join(CFG['images'], info['sheet'])
+    if not os.path.isfile(path):
+        return None
+    mt = os.path.getmtime(path)
+    c = BMP_CACHE.get(path)
+    img = c[1] if c and c[0] == mt else gp.read_bmp(path)
+    BMP_CACHE[path] = (mt, img)
+    pal = os.path.join(CFG['images'], 'spr_palette.bmp')
+    key = gp.read_bmp(pal).color(0, 0) if os.path.isfile(pal) else (255, 0, 255)
+    W, H = 16, 32
+    px = bytearray(W * H * 4)
+    t0 = info['tile']
+    for lin in range(4):
+        for tx in range(2):
+            t = t0 + lin * 16 + tx
+            sx, sy = (t % 16) * 8, (t // 16) * 8
+            for y in range(8):
+                for x in range(8):
+                    if sy + y >= img.h:
+                        continue
+                    col = img.color(sx + x, sy + y)
+                    if col == key:
+                        continue
+                    i = ((lin * 8 + y) * W + tx * 8 + x) * 4
+                    px[i:i + 4] = bytes((col[0], col[1], col[2], 255))
+    return png_rgba(W, H, bytes(px))
+
+
 def api_portraits_status():
     out = {}
+    try:
+        sprites = sprite_table()
+    except Exception as e:  # noqa: BLE001
+        print('sprites: %s' % e)
+        sprites = {}
     for cid in range(40):
         sh = bmp_info(sheet_path(cid), True)
         st = bmp_info(strip_path(cid), False)
         inc = INC_INDEX.get('char%02d.til.inc' % cid)
-        if not (sh or st or inc):
+        if not (sh or st or inc or cid in sprites):
             continue
-        out[cid] = {"sheet": sh, "strip": st, "inc": emotion_count(cid) if inc else 0,
+        out[cid] = {"sprite": sprites.get(cid), "sheet": sh, "strip": st, "inc": emotion_count(cid) if inc else 0,
                     "incMtime": os.path.getmtime(inc) if inc else None}
     return {"chars": out, "images": CFG['images'], "stripsDir": PORTRAITS_DIR}
 
@@ -512,6 +624,13 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/portraits/status':
                 with LOCK:
                     return self._send(200, api_portraits_status())
+            m = re.fullmatch(r'/api/sprite/(\d+)\.png', path)
+            if m:
+                with LOCK:
+                    png = render_sprite(int(m.group(1)))
+                if png is None:
+                    return self._send(404, {"error": "no sprite"})
+                return self._send(200, png, 'image/png')
             m = re.fullmatch(r'/api/(sheet|strip)/(\d+)/(\d+)\.png', path)
             if m:
                 cid, emo = int(m.group(2)), int(m.group(3))

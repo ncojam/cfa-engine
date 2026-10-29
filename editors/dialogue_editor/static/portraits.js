@@ -65,6 +65,14 @@ function pvImg(cid, emo, src) {
   return img;
 }
 
+function pvSprite(cid, cls) {
+  const sp = PV.status && PV.status.chars[cid] && PV.status.chars[cid].sprite;
+  if (!sp) return null;
+  const img = h('img', { class: 'pv-spr ' + (cls || ''), src: `/api/sprite/${cid}.png?v=${PV.ver}`, alt: '', title: `Спрайт: ${sp.sheet}, тайл ${sp.tile}\n${sp.from}` });
+  img.onerror = () => img.remove();
+  return img;
+}
+
 function renderPortraits() {
   const root = $('#portraits'); root.innerHTML = '';
   const use = pvUsage();
@@ -98,6 +106,7 @@ function renderPortraits() {
     const thumb = pvImg(cid, 0, s.sheet ? 'sheet' : 'strip') || h('div', { class: 'ph2' }, (charName(cid)[0] || '?'));
     ul.append(h('div', { class: 'pv-row' + (cid === PV.cid ? ' on' : ''), onclick: () => { PV.cid = cid; renderPortraits(); } },
       thumb,
+      pvSprite(cid, 'sm'),
       h('div', { class: 'pv-row-t' },
         h('div', null, `${charName(cid)} `, h('span', { class: 'muted' }, `char${String(cid).padStart(2, '0')}`)),
         h('div', { class: 'pv-tags' },
@@ -130,6 +139,7 @@ function pvDetail(cid, use) {
   if (s.st.strip && s.st.strip.error) warns.push('лента: ' + s.st.strip.error);
 
   det.append(h('div', { class: 'pv-head' },
+    pvSprite(cid, 'lg'),
     h('h2', null, `${charName(cid)} · char${String(cid).padStart(2, '0')}`),
     h('div', { class: 'seg' },
       h('button', { class: src === 'sheet' ? 'on' : '', disabled: !s.sheet, title: 'project/images/charNN.bmp', onclick: () => { PV.src = 'sheet'; renderPortraits(); } }, `лист (${s.sheet})`),

@@ -278,3 +278,6 @@ details.more>summary:hover{color:var(--muted)}
 .pv-cap{font-size:12px;font-weight:600} .pv-n{font-size:11px;color:var(--muted)}
 .pv-refs{display:flex;flex-wrap:wrap;gap:4px;justify-content:center;font-size:11px;font-family:var(--mono)}
 .pv-refs a{color:var(--k-text)}
+.pv-row img.pv-spr,.pv-spr{image-rendering:pixelated;object-fit:contain;background:none;flex:none}
+.pv-row img.pv-spr.sm{width:16px;height:32px}
+.pv-spr.lg{width:32px;height:64px}
