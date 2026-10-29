@@ -73,6 +73,8 @@ python3 ../apply_spr_palette.py ../images/spr_palette.bmp ../images "$SPR_IMAGES
 "$TMX2INCL" b "$SPR_IMAGES"/chr_spr_items.bmp chr_spr_items
 "$TMX2INCL" b "$SPR_IMAGES"/chr_spr_marina.bmp chr_spr_marina
 "$TMX2INCL" b "$SPR_IMAGES"/chr_spr_stas.bmp chr_spr_stas
+"$TMX2INCL" b "$SPR_IMAGES"/chr_spr_edd.bmp chr_spr_edd
+"$TMX2INCL" b "$SPR_IMAGES"/chr_spr_dima.bmp chr_spr_dima
 "$TMX2INCL" b "$SPR_IMAGES"/chr_spr_witch.bmp chr_spr_witch
 "$TMX2INCL" b "$SPR_IMAGES"/chr_spr_boar.bmp chr_spr_boar
 "$TMX2INCL" b "$SPR_IMAGES"/chr_spr_bat.bmp chr_spr_bat

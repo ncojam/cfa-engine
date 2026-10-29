@@ -30,6 +30,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import dlgcore  # noqa: E402
 
+PORTRAITS_DIR = os.path.normpath(os.path.join(HERE, '..', 'portraits'))
+sys.path.insert(0, PORTRAITS_DIR)
+import gbportrait as gp  # noqa: E402
+
 LOCK = threading.Lock()
 CFG = {}
 
@@ -249,6 +253,136 @@ def png_rgba(w, h, rgba):
             chunk(b'IDAT', zlib.compress(raw, 9)) + chunk(b'IEND', b''))
 
 
+# ------------------------------------------------------------------ portrait sources (BMP sheets / strips)
+# sheet: project/images/charNN.bmp (engine layout)   strip: editors/portraits/charNN_faces.bmp
+
+BMP_CACHE = {}  # path -> (mtime, strip Image)
+
+
+def sheet_path(cid):
+    return os.path.join(CFG['images'], 'char%02d.bmp' % cid)
+
+
+def strip_path(cid):
+    return os.path.join(PORTRAITS_DIR, 'char%02d_faces.bmp' % cid)
+
+
+def bmp_strip(path, is_sheet):
+    """BMP -> readable strip (cached by mtime). None if there is no file."""
+    if not os.path.isfile(path):
+        return None
+    mt = os.path.getmtime(path)
+    c = BMP_CACHE.get(path)
+    if c and c[0] == mt:
+        return c[1]
+    img = gp.read_bmp(path)
+    strip = gp.unpack(img) if is_sheet else img
+    BMP_CACHE[path] = (mt, strip)
+    return strip
+
+
+def bmp_info(path, is_sheet):
+    if not os.path.isfile(path):
+        return None
+    try:
+        img = gp.read_bmp(path)
+        n = gp.emotion_count(img) if is_sheet else img.w // gp.PW
+        return {"n": n, "w": img.w, "h": img.h, "kind": img.kind, "mtime": os.path.getmtime(path)}
+    except Exception as e:  # noqa: BLE001
+        return {"n": 0, "error": str(e), "mtime": os.path.getmtime(path)}
+
+
+def render_bmp_emotion(path, is_sheet, emo):
+    strip = bmp_strip(path, is_sheet)
+    if strip is None or emo >= strip.w // gp.PW:
+        return None
+    W, H = gp.PW, gp.PH
+    bg = strip.color(0, 0) if is_sheet else None   # sheets: tech-strip colour = transparent
+    px = bytearray(W * H * 4)
+    for y in range(H):
+        for x in range(W):
+            c = strip.color(emo * W + x, y)
+            if c == bg:
+                continue
+            i = (y * W + x) * 4
+            px[i:i + 4] = bytes((c[0], c[1], c[2], 255))
+    return png_rgba(W, H, bytes(px))
+
+
+def api_portraits_status():
+    out = {}
+    for cid in range(40):
+        sh = bmp_info(sheet_path(cid), True)
+        st = bmp_info(strip_path(cid), False)
+        inc = INC_INDEX.get('char%02d.til.inc' % cid)
+        if not (sh or st or inc):
+            continue
+        out[cid] = {"sheet": sh, "strip": st, "inc": emotion_count(cid) if inc else 0,
+                    "incMtime": os.path.getmtime(inc) if inc else None}
+    return {"chars": out, "images": CFG['images'], "stripsDir": PORTRAITS_DIR}
+
+
+def api_portraits_convert(body):
+    """direction 'unpack' (sheet -> strip) | 'pack' (strip -> sheet). Same rules as the CLI scripts."""
+    direction, ids = body.get('direction'), [int(x) for x in body.get('chars', [])]
+    dry, trim = bool(body.get('dryRun')), bool(body.get('trim'))
+    stamp = time.strftime('%Y%m%d_%H%M%S')
+    log = []
+    for cid in ids:
+        name = 'char%02d' % cid
+        try:
+            if direction == 'unpack':
+                src = sheet_path(cid)
+                if not os.path.isfile(src):
+                    log.append({"cid": cid, "ok": False, "msg": 'нет ' + src}); continue
+                sheet = gp.read_bmp(src)
+                strip = gp.unpack(sheet)
+                back = gp.pack(strip, base=sheet)
+                if back.px != sheet.px[:len(back.px)]:
+                    raise ValueError('проверка туда-обратно не сошлась')
+                dst = strip_path(cid)
+                if os.path.isfile(dst) and os.path.getmtime(dst) > os.path.getmtime(src) and not body.get('force'):
+                    log.append({"cid": cid, "ok": False, "newer": True,
+                                "msg": 'лента новее листа — не перезаписываю (можно принудительно)'}); continue
+                if not dry:
+                    if os.path.isfile(dst):
+                        bdir = os.path.join(PORTRAITS_DIR, 'backups', stamp, 'faces')
+                        os.makedirs(bdir, exist_ok=True)
+                        shutil.copy2(dst, os.path.join(bdir, os.path.basename(dst)))
+                    gp.write_bmp(dst, strip)
+                log.append({"cid": cid, "ok": True, "msg": '%s → %s_faces.bmp, %d эмоц.%s' % (
+                    name, name, gp.emotion_count(sheet), ' (проверка)' if dry else '')})
+            elif direction == 'pack':
+                src, dst = strip_path(cid), sheet_path(cid)
+                if not os.path.isfile(src):
+                    log.append({"cid": cid, "ok": False, "msg": 'нет ' + src}); continue
+                strip = gp.read_bmp(src)
+                base = gp.read_bmp(dst) if os.path.isfile(dst) else None
+                if base is not None:
+                    strip = gp.convert_like(strip, base, src)
+                sheet = gp.pack(strip, base, trim=trim)
+                n_strip, n_base = strip.w // gp.PW, gp.emotion_count(base) if base is not None else 0
+                note = ''
+                if n_strip < n_base:
+                    note = ' [в ленте %d из %d: %s]' % (n_strip, n_base, 'лишние удалены' if trim else 'остальные из оригинала')
+                if base is not None and sheet.px == base.px and sheet.h == base.h:
+                    log.append({"cid": cid, "ok": True, "msg": name + ': без изменений'}); continue
+                if not dry:
+                    if base is not None:
+                        bdir = os.path.join(PORTRAITS_DIR, 'backups', stamp)
+                        os.makedirs(bdir, exist_ok=True)
+                        shutil.copy2(dst, os.path.join(bdir, name + '.bmp'))
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    gp.write_bmp(dst, sheet)
+                log.append({"cid": cid, "ok": True, "msg": '%s_faces.bmp → %s.bmp, %d эмоц.%s%s' % (
+                    name, name, gp.emotion_count(sheet), note, ' (проверка)' if dry else '')})
+            else:
+                raise ValueError('direction?')
+        except Exception as e:  # noqa: BLE001
+            log.append({"cid": cid, "ok": False, "msg": '%s: ОШИБКА — %s' % (name, e)})
+    return {"log": log}
+
+
 # ------------------------------------------------------------------ API
 
 def load_font():
@@ -375,6 +509,18 @@ class Handler(BaseHTTPRequestHandler):
                 if png is None:
                     return self._send(404, {"error": "no portrait"})
                 return self._send(200, png, 'image/png')
+            if path == '/api/portraits/status':
+                with LOCK:
+                    return self._send(200, api_portraits_status())
+            m = re.fullmatch(r'/api/(sheet|strip)/(\d+)/(\d+)\.png', path)
+            if m:
+                cid, emo = int(m.group(2)), int(m.group(3))
+                is_sheet = m.group(1) == 'sheet'
+                with LOCK:
+                    png = render_bmp_emotion(sheet_path(cid) if is_sheet else strip_path(cid), is_sheet, emo)
+                if png is None:
+                    return self._send(404, {"error": "no portrait"})
+                return self._send(200, png, 'image/png')
             return self._send(404, {"error": "not found"})
         except Exception as e:  # noqa: BLE001
             import traceback
@@ -392,6 +538,8 @@ class Handler(BaseHTTPRequestHandler):
                 if path == '/api/meta':
                     save_meta(body)
                     return self._send(200, {"ok": True})
+                if path == '/api/portraits/convert':
+                    return self._send(200, api_portraits_convert(body))
                 if path == '/api/rescan':
                     index_inc_files()
                     PORTRAIT_CACHE.clear()
@@ -420,6 +568,8 @@ def main():
                     help='game project dir (default: <editor>/../../project)')
     ap.add_argument('--gfx', action='append', default=None,
                     help='dir(s) to search for charNN.til.inc / charNN.pal.inc (default: whole project)')
+    ap.add_argument('--images', default=None,
+                    help='dir with portrait sheets charNN.bmp (default: <project>/images)')
     ap.add_argument('--host', default='127.0.0.1')
     ap.add_argument('--port', type=int, default=8765)
     ap.add_argument('--no-browser', action='store_true')
@@ -431,6 +581,7 @@ def main():
     CFG['h'] = os.path.join(a.project, 'src', 'dialogues.h')
     CFG['gfx_dirs'] = a.gfx or [a.project]
     CFG['verbose'] = a.verbose
+    CFG['images'] = a.images or os.path.join(a.project, 'images')
     for p in (CFG['cpp'], CFG['h']):
         if not os.path.isfile(p):
             sys.exit('Не найден файл: %s  (укажите --project)' % p)
