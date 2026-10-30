@@ -69,18 +69,14 @@ python3 ../apply_spr_palette.py ../images/spr_palette.bmp ../images "$SPR_IMAGES
 "$TMX2INCL" bp ../images/char37.bmp char37
 "$TMX2INCL" b ../images/char38.bmp char38
 "$TMX2INCL" bp ../images/char39.bmp char39
-"$TMX2INCL" b "$SPR_IMAGES"/chr_spr_lidia.bmp chr_spr_lidia
-"$TMX2INCL" b "$SPR_IMAGES"/chr_spr_items.bmp chr_spr_items
-"$TMX2INCL" b "$SPR_IMAGES"/chr_spr_marina.bmp chr_spr_marina
-"$TMX2INCL" b "$SPR_IMAGES"/chr_spr_stas.bmp chr_spr_stas
-"$TMX2INCL" b "$SPR_IMAGES"/chr_spr_edd.bmp chr_spr_edd
-"$TMX2INCL" b "$SPR_IMAGES"/chr_spr_dima.bmp chr_spr_dima
-"$TMX2INCL" b "$SPR_IMAGES"/chr_spr_witch.bmp chr_spr_witch
-"$TMX2INCL" b "$SPR_IMAGES"/chr_spr_boar.bmp chr_spr_boar
-"$TMX2INCL" b "$SPR_IMAGES"/chr_spr_bat.bmp chr_spr_bat
-"$TMX2INCL" b "$SPR_IMAGES"/chr_spr_frog.bmp chr_spr_frog
-"$TMX2INCL" b "$SPR_IMAGES"/chr_spr_spell_basic.bmp chr_spr_spell_basic
-"$TMX2INCL" b "$SPR_IMAGES"/chr_spr_spell_floral.bmp chr_spr_spell_floral
+# Листы chr_spr_*.bmp собираем все, какие есть. Персонажей со своим тайлсетом
+# (имя листа = имя персонажа из dataPointers) находит gen_char_sprites.py и
+# генерирует src/char_sprites_gen.* (таблица chr_spr[] и charOwnTileset[]).
+python3 ../tools/gen_char_sprites.py
+for f in "$SPR_IMAGES"/chr_spr_*.bmp; do
+    n=$(basename "$f" .bmp)
+    "$TMX2INCL" b "$f" "$n"
+done
 "$TMX2INCL" b "$SPR_IMAGES"/mss-vika00.bmp vika00
 "$TMX2INCL" bct ../images/mts-10.bmp ../resources/map-01-bg.tmx gr_main
 "$TMX2INCL" bct ../images/mts-10.bmp ../resources/map-01.tmx gr_main

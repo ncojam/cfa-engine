@@ -41,3 +41,6 @@ Thumbs.db
 editors/dialogue_editor/backups/
 __pycache__/
 *.pyc
+editors/**/*.kra
+editors/**/*.png
+*~

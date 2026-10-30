@@ -1,5 +1,5 @@
 # Имя выходного файла программы
-PROGNAME = contra_force_advance
+PROGNAME = graveblood
 
 # Toolchain (devkitARM). Переопределяемо через переменные окружения,
 # например: make CXX=arm-none-eabi-g++
@@ -17,7 +17,7 @@ PARAMS += -mthumb -mthumb-interwork -g0 -O2
 PARAMS += -Iout -I..
 
 # Список папок с исходниками (как в исходном Windows-Makefile)
-SRC_DIRS = src src/music src/player src/npc
+SRC_DIRS = src src/music src/player src/npc src/companions
 INCLUDES = -Isrc -Isrc/music -Isrc/player
 
 # Собираем ВСЕ .cpp файлы с путями из всех SRC_DIRS
@@ -29,7 +29,12 @@ MODULES_DEP = $(patsubst %.o,%.dep,$(MODULES_O))
 # Правило поиска .cpp во всех подпапках
 vpath %.cpp $(SRC_DIRS)
 
-.PHONY: all dep clean
+# Номер билда для главного меню: неделя месяца.месяц.год (например 4.9.26).
+# Считается при каждой сборке; build_info.o пересобирается всегда (FORCE),
+# остальной код из-за этого не пересобирается.
+BUILD_VERSION := $(shell d=$$(date +%-d); echo $$(( (d + 6) / 7 )).$$(date +%-m.%y))
+
+.PHONY: all dep clean FORCE
 all: $(PROGNAME).gba
 
 $(PROGNAME).gba: out/$(PROGNAME).elf
@@ -42,6 +47,10 @@ out/$(PROGNAME).elf: $(MODULES_O)
 out/%.o: %.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(PARAMS) $(INCLUDES) -o $@ -c $<
+
+out/build_info.o: FORCE
+out/build_info.o: PARAMS += -DBUILD_VERSION='"$(BUILD_VERSION)"'
+FORCE:
 
 dep: $(MODULES_DEP)
 
