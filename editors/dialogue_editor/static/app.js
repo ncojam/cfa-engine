@@ -9,7 +9,8 @@ const LIMITS = {0:27, 1:108, 6:33, 8:33, 12:33};           // char[] sizes, '\0'
 const STATS = ["Kindness","Humor","Charisma","Allure","SelfEsteem","Intellect","Sanity","Behaviour"];
 const DEFAULT_CHARS = ["Vika","Lidia","Arthur","Karina","Katya","Misha","Principal","Nina","Classmaster","Vova","Augustina","Maxim","Artyom","Edd","Marina","Andrey","Yana","Liza","Dima","Anya","Grisha","Natasha","Masha","Mom","Dad","Kostya","Lyuda","Dina","Ruslana","Polina","Darina","Veronika","Carolina","Serega","Vlad","Kyrill","Hobo","Shibainu","Stas","Witch"];
 // Guessed from how the numbers are used in the existing lines — rename them in ⚙ Settings.
-const DEFAULT_EMOTIONS = ["нейтрально","улыбка","недовольство","радость","дружелюбно","вопрос","злость","ухмылка","испуг","тревога","серьёзно","восторг","грусть","расстроен"];
+// Названия по тому, что реально нарисовано (у Вики эмоций 7: 0..6).
+const DEFAULT_EMOTIONS = ["воодушевлённо","нейтрально / лёгкая улыбка","говорит / указывает","смущение / стыд","влюблённость","meh / не очень","злость","ухмылка","испуг","тревога","серьёзно","восторг","грусть","расстроен"];
 
 // Display kinds (iconLocation of phrases that show text)
 const TEXT_KINDS = { 0:"Реплика", "-14":"Подсказка (−14)", "-26":"Авто-реплика (−26)" };
