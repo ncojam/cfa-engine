@@ -92,10 +92,10 @@ function renderPortraits() {
     h('div', { class: 'seg' }, [['all', 'Все'], ['used', 'В диалогах'], ['miss', 'С пробелами']].map(([v, l]) =>
       h('button', { class: PV.filter === v ? 'on' : '', onclick: () => { PV.filter = v; renderPortraits(); } }, l))),
     h('div', { class: 'spacer' }),
-    h('button', { class: 'btn small', title: 'Все листы project/images/charNN.bmp → ленты charNN_faces.bmp', disabled: PV.busy,
-      onclick: () => conv('unpack', list.filter(x => x.s.st.sheet).map(x => x.cid)) }, 'Все листы → ленты'),
+    h('button', { class: 'btn small', title: 'Листы = внутриигровая графика project/images/charNN.bmp. Все листы → ленты charNN_faces.bmp', disabled: PV.busy,
+      onclick: () => conv('unpack', list.filter(x => x.s.st.sheet).map(x => x.cid)) }, 'Все листы (игра) → ленты'),
     h('button', { class: 'btn small', title: 'Все ленты → листы движка (сначала проверка)', disabled: PV.busy,
-      onclick: () => conv('pack', list.filter(x => x.s.st.strip).map(x => x.cid)) }, 'Все ленты → листы'),
+      onclick: () => conv('pack', list.filter(x => x.s.st.strip).map(x => x.cid)) }, 'Все ленты → листы (игра)'),
     h('button', { class: 'btn small ghost', onclick: () => openPortraits() }, '⟳'),
     h('button', { class: 'btn small ghost', onclick: closePortraits }, '✕ к диалогам')));
 
@@ -142,11 +142,15 @@ function pvDetail(cid, use) {
     pvSprite(cid, 'lg'),
     h('h2', null, `${charName(cid)} · char${String(cid).padStart(2, '0')}`),
     h('div', { class: 'seg' },
-      h('button', { class: src === 'sheet' ? 'on' : '', disabled: !s.sheet, title: 'project/images/charNN.bmp', onclick: () => { PV.src = 'sheet'; renderPortraits(); } }, `лист (${s.sheet})`),
+      h('button', { class: src === 'sheet' ? 'on' : '', disabled: !s.sheet, title: 'лист = внутриигровая графика: project/images/charNN.bmp', onclick: () => { PV.src = 'sheet'; renderPortraits(); } }, `лист · игра (${s.sheet})`),
       h('button', { class: src === 'strip' ? 'on' : '', disabled: !s.strip, title: 'editors/portraits/charNN_faces.bmp', onclick: () => { PV.src = 'strip'; renderPortraits(); } }, `лента (${s.strip})`)),
     h('div', { class: 'spacer' }),
-    h('button', { class: 'btn small', disabled: !s.st.sheet || PV.busy, onclick: () => pvConvert('unpack', [cid]) }, 'Лист → лента'),
-    h('button', { class: 'btn small primary', disabled: !s.st.strip || PV.busy, onclick: () => pvConvert('pack', [cid]) }, 'Лента → лист')));
+    h('button', { class: 'btn small', disabled: !s.st.sheet || PV.busy, onclick: () => pvConvert('unpack', [cid]) }, 'Лист (игра) → лента'),
+    h('button', { class: 'btn small primary', disabled: !s.st.strip || PV.busy, onclick: () => pvConvert('pack', [cid]) }, 'Лента → лист (игра)'),
+    h('button', { class: 'btn small', disabled: !s.st.big || PV.busy, title: 'editors/portraits/charNN_faces_big.bmp (x10) → лента: ресайз /10 + палитра chr_spr_witch.bmp',
+      onclick: () => pvConvert('big', [cid]) }, 'Большой → лента'),
+    h('button', { class: 'btn small', disabled: !s.st.strip || PV.busy, title: 'Чистка лайна: локти, выбивающиеся ступеньки, затемнение во внутренних уголках',
+      onclick: () => pvConvert('pixelart', [cid]) }, 'Пиксельарт-прогон')));
   if (warns.length) det.append(h('div', { class: 'pv-warn' }, warns.map(w => h('div', null, '⚠ ' + w))));
   det.append(h('div', { class: 'pv-legend muted' },
     `Используется: ${s.used.join(', ') || '—'} · `,
@@ -176,6 +180,15 @@ async function pvConvert(direction, ids, extra = {}) {
   if (!ids.length) return toast('Нечего конвертировать');
   PV.busy = true; renderPortraits();
   try {
+    if (direction === 'big' || direction === 'pixelart') {   // тяжёлые: без пробного прогона, бэкап ленты в portraits/backups
+      if (!confirm(direction === 'big' ? 'Перезаписать ленту из большого файла (_big)?' : 'Прогнать ленту пиксельарт-чисткой?')) return;
+      toast('Считаю… (большой файл может обрабатываться десятки секунд)');
+      const res = await api('/api/portraits/convert', { direction, chars: ids });
+      const bad = res.log.filter(l => !l.ok);
+      toast(res.log.map(l => l.msg).join(' · '), bad.length ? 'err' : '');
+      await pvLoad();
+      return;
+    }
     // сначала проверка, потом подтверждение
     const dry = await api('/api/portraits/convert', { direction, chars: ids, dryRun: true, ...extra });
     const lines = dry.log.map(l => (l.ok ? '✓ ' : '✕ ') + l.msg).join('\n');

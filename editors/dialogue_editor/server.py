@@ -33,6 +33,7 @@ import dlgcore  # noqa: E402
 PORTRAITS_DIR = os.path.normpath(os.path.join(HERE, '..', 'portraits'))
 sys.path.insert(0, PORTRAITS_DIR)
 import gbportrait as gp  # noqa: E402
+import bigconv  # noqa: E402
 
 LOCK = threading.Lock()
 CFG = {}
@@ -267,6 +268,21 @@ def strip_path(cid):
     return os.path.join(PORTRAITS_DIR, 'char%02d_faces.bmp' % cid)
 
 
+def big_path(cid):
+    return os.path.join(PORTRAITS_DIR, 'char%02d_faces_big.bmp' % cid)
+
+
+def spr_palette():
+    return bigconv.load_palette(os.path.join(CFG['images'], 'chr_spr_witch.bmp'))
+
+
+def _backup_strip(dst, stamp):
+    if os.path.isfile(dst):
+        bdir = os.path.join(PORTRAITS_DIR, 'backups', stamp, 'faces')
+        os.makedirs(bdir, exist_ok=True)
+        shutil.copy2(dst, os.path.join(bdir, os.path.basename(dst)))
+
+
 def bmp_strip(path, is_sheet):
     """BMP -> readable strip (cached by mtime). None if there is no file."""
     if not os.path.isfile(path):
@@ -426,10 +442,12 @@ def api_portraits_status():
     for cid in range(40):
         sh = bmp_info(sheet_path(cid), True)
         st = bmp_info(strip_path(cid), False)
+        bg = os.path.isfile(big_path(cid))
         inc = INC_INDEX.get('char%02d.til.inc' % cid)
-        if not (sh or st or inc or cid in sprites):
+        if not (sh or st or bg or inc or cid in sprites):
             continue
-        out[cid] = {"sprite": sprites.get(cid), "sheet": sh, "strip": st, "inc": emotion_count(cid) if inc else 0,
+        out[cid] = {"sprite": sprites.get(cid), "sheet": sh, "strip": st,
+                    "big": {"mtime": os.path.getmtime(big_path(cid))} if bg else None, "inc": emotion_count(cid) if inc else 0,
                     "incMtime": os.path.getmtime(inc) if inc else None}
     return {"chars": out, "images": CFG['images'], "stripsDir": PORTRAITS_DIR}
 
@@ -488,6 +506,26 @@ def api_portraits_convert(body):
                     gp.write_bmp(dst, sheet)
                 log.append({"cid": cid, "ok": True, "msg": '%s_faces.bmp → %s.bmp, %d эмоц.%s%s' % (
                     name, name, gp.emotion_count(sheet), note, ' (проверка)' if dry else '')})
+            elif direction == 'big':      # charNN_faces_big.bmp -> charNN_faces.bmp
+                src, dst = big_path(cid), strip_path(cid)
+                if not os.path.isfile(src):
+                    log.append({"cid": cid, "ok": False, "msg": 'нет ' + src}); continue
+                strip = bigconv.big_to_strip(gp.read_bmp(src), spr_palette())
+                if not dry:
+                    _backup_strip(dst, stamp)
+                    gp.write_bmp(dst, strip)
+                log.append({"cid": cid, "ok": True, "msg": '%s_faces_big.bmp → %s_faces.bmp, %d эмоц.%s' % (
+                    name, name, strip.w // gp.PW, ' (проверка)' if dry else '')})
+            elif direction == 'pixelart':  # пиксельартный прогон по ленте
+                dst = strip_path(cid)
+                if not os.path.isfile(dst):
+                    log.append({"cid": cid, "ok": False, "msg": 'нет ' + dst}); continue
+                out, st = bigconv.pixelart_pass(gp.read_bmp(dst), spr_palette())
+                if not dry:
+                    _backup_strip(dst, stamp)
+                    gp.write_bmp(dst, out)
+                log.append({"cid": cid, "ok": True, "msg": '%s: локти %d, ступеньки %d, сглаживание %d%s' % (
+                    name, st['elbows'], st['stairs'], st['aa'], ' (проверка)' if dry else '')})
             else:
                 raise ValueError('direction?')
         except Exception as e:  # noqa: BLE001
