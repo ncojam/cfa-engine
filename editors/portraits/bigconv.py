@@ -47,6 +47,7 @@ def bg_of(pal, img=None):
 
 # ------------------------------------------------------------------ 1. resize x10 + palette
 
+LINE = ('line',)
 _W1 = [5 - abs(i - 4.5) + 0.5 for i in range(SCALE)]   # тент (≈билинейный фильтр) 1..5..1
 
 
@@ -62,18 +63,27 @@ def _bg_amount(c, bg):
     return 0.0
 
 
+LINE_LUMA = 70 * 1000   # тёмнее этого — лайн (luma 0..255000)
+LINE_ON = 0.30          # доля лайна в блоке 10x10, с которой пиксель = лайн
+LINE_GAP = 0.08         # слабый лайн: ставим, только если он соединяет разрыв линии
+
+
 def downscale(big, bg):
     """Каждый 10x10 блок — только внутри своей эмоции (720x800 кусок), соседи не смешиваются.
-    Блок, где фона >= половины, = фон; иначе усредняем ТОЛЬКО не-фоновые пиксели —
-    внешний контур не смешивается с маджентой и остаётся острым."""
+    Лайн считается отдельно: блок с достаточной долей лайна = чистый цвет лайна (без смешивания),
+    заливка усредняется без лайна и без фона. Блок, где фона >= половины, = фон —
+    внешний контур не смешивается с маджентой и остаётся острым.
+    Возвращает (grid, line_color)."""
     ow, oh = big.w // SCALE, big.h // SCALE
     out = [[bg] * ow for _ in range(oh)]
+    cov = [[0.0] * ow for _ in range(oh)]
+    fill = [[None] * ow for _ in range(oh)]
+    lr = lg = lb = ln = 0
     for oy in range(oh):
         src = [[tuple(big.color(x, y)) for x in range(big.w)] for y in range(oy * SCALE, (oy + 1) * SCALE)]
-        orow = out[oy]
         for ox in range(ow):
             x0 = ox * SCALE
-            sw = bw = cw = r = g = b = 0.0
+            sw = bw = lw = cw = r = g = b = 0.0
             for j, row in enumerate(src):
                 wy = _W1[j]
                 for i in range(SCALE):
@@ -81,24 +91,58 @@ def downscale(big, bg):
                     w = wy * _W1[i]
                     sw += w
                     a = _bg_amount(c, bg)
-                    if a:
-                        bw += w * a        # кромку/фон в цвет не мешаем
+                    if a:                      # фон / кромка лайн+маджента
+                        bw += w * a
+                        lw += w * (1 - a)
+                        continue
+                    if luma(c) < LINE_LUMA:
+                        lw += w
+                        lr += c[0]; lg += c[1]; lb += c[2]; ln += 1
                         continue
                     cw += w
                     r += c[0] * w; g += c[1] * w; b += c[2] * w
-            if bw * 2 >= sw or cw <= 0:
-                continue
-            orow[ox] = (int(r / cw + 0.5), int(g / cw + 0.5), int(b / cw + 0.5))
-    return out
+            cov[oy][ox] = lw / sw
+            if cw > 0:
+                fill[oy][ox] = (int(r / cw + 0.5), int(g / cw + 0.5), int(b / cw + 0.5))
+            if lw / sw >= LINE_ON:
+                out[oy][ox] = LINE
+            elif bw * 2 >= sw:
+                pass                           # фон
+            elif cw > 0:
+                out[oy][ox] = fill[oy][ox]
+            else:
+                out[oy][ox] = LINE
+    # латаем разрывы: слабый лайн, который соединяет две части линии
+    for _ in range(2):
+        add = []
+        for oy in range(oh):
+            for ox in range(ow):
+                if out[oy][ox] is LINE or cov[oy][ox] < LINE_GAP:
+                    continue
+                e0 = (ox // PW) * PW
+                def L(dx, dy):
+                    x, y = ox + dx, oy + dy
+                    return e0 <= x < e0 + PW and 0 <= y < oh and out[y][x] is LINE
+                n8 = [L(dx, dy) for dx, dy in ((-1, -1), (0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0))]
+                # число отдельных кусков линии вокруг (переходы по кольцу 8 соседей)
+                parts = sum(1 for k in range(8) if n8[k] and not n8[k - 1])
+                if parts >= 2:
+                    add.append((ox, oy))
+        for ox, oy in add:
+            out[oy][ox] = LINE
+        if not add:
+            break
+    line = (lr // ln, lg // ln, lb // ln) if ln else (0, 0, 0)
+    return out, line
 
 
-def quantize(grid, pal, bg):
+def quantize(grid, pal, bg, skip=None):
     """Приводим к палитре. Если цвет сильно мимо палитры — шахматный дизеринг двумя цветами."""
     cols = [c for c in pal if c != bg]
     cache = {}
     for y, row in enumerate(grid):
         for x, c in enumerate(row):
-            if c == bg:
+            if c == bg or c is skip:
                 continue
             m = cache.get(c)
             if m is None:
@@ -137,12 +181,14 @@ def big_to_strip(big, pal):
     if big.w % (PW * SCALE) or big.h != PH * SCALE:
         raise ValueError('большой файл должен быть %dx%d на эмоцию (сейчас %dx%d)' % (PW * SCALE, PH * SCALE, big.w, big.h))
     bg = bg_of(pal, big)
-    grid = downscale(big, bg)
+    grid, line = downscale(big, bg)
     if bg not in pal:   # фон приводим к фону палитры, если он чуть другой
         pbg = min(pal, key=lambda p: dist(p, bg))
         grid = [[pbg if c == bg else c for c in row] for row in grid]
         bg = pbg
-    return grid_to_image(quantize(grid, pal, bg))
+    pline = min((c for c in pal if c != bg), key=lambda p: dist(p, line))   # лайн — ровно один цвет палитры, без дизера
+    quantize(grid, pal, bg, skip=LINE)
+    return grid_to_image([[pline if c is LINE else c for c in row] for row in grid])
 
 
 # ------------------------------------------------------------------ 2. pixel-art pass
