@@ -188,7 +188,14 @@ def big_to_strip(big, pal):
         bg = pbg
     pline = min((c for c in pal if c != bg), key=lambda p: dist(p, line))   # лайн — ровно один цвет палитры, без дизера
     quantize(grid, pal, bg, skip=LINE)
-    return grid_to_image([[pline if c is LINE else c for c in row] for row in grid])
+    grid = [[pline if c is LINE else c for c in row] for row in grid]
+    # линия в 1 px: локти -> сглаживание, во внутренних уголках — тоже сглаживание
+    cache = {}
+    for e in range(len(grid[0]) // PW):
+        v = View(grid, e * PW, PW, len(grid), False, False)
+        _elbows(v, pline, bg, pal, cache)
+        _inner_aa(v, pline, pal, bg, cache)
+    return grid_to_image(grid)
 
 
 # ------------------------------------------------------------------ 2. pixel-art pass
@@ -233,8 +240,9 @@ def _line_color(v, bg):
     return max(cnt, key=cnt.get) if cnt else None
 
 
-def _elbows(v, L, bg):
-    """Убираем «локти» — лишний пиксель в углу, из-за которого линия становится 2 px толщиной."""
+def _elbows(v, L, bg, pal, cache):
+    """«Локти» — лишний пиксель в углу ступеньки (линия 2 px). Внутри фигуры он становится
+    сглаживанием (цвет между заливкой и лайном), снаружи (рядом фон) — фоном, контур остаётся острым."""
     n = 0
     for y in range(v.h):
         for x in range(v.w):
@@ -252,9 +260,13 @@ def _elbows(v, L, bg):
                     if not ok:
                         continue
                     a, b = v.get(x - dx, y), v.get(x, y - dy)
-                    rep = bg if bg in (a, b) else (a if a is not None else b)
-                    if rep is None:
-                        continue
+                    if bg in (a, b):
+                        rep = bg
+                    else:
+                        F = a if a not in (None, L) else b
+                        if F in (None, L):
+                            continue
+                        rep = _shade(F, L, pal, bg, cache) or F
                     v.set(x, y, rep)
                     n += 1
                     break
@@ -384,10 +396,10 @@ def pixelart_pass(img, pal):
         L = _line_color(base, bg)
         if L is None:
             continue
-        st["elbows"] += _elbows(base, L, bg)
+        st["elbows"] += _elbows(base, L, bg, pal, cache)
         for tr in (False, True):
             for mx in (False, True):
                 st["stairs"] += _fix_stairs(View(g, e * PW, PW, img.h, tr, mx), L)
-        st["elbows"] += _elbows(base, L, bg)
+        st["elbows"] += _elbows(base, L, bg, pal, cache)
         st["aa"] += _inner_aa(base, L, pal, bg, cache)
     return grid_to_image(g), st
