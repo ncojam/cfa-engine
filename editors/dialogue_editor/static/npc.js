@@ -112,7 +112,8 @@ function npRenderTree() {
   const row = (i, depth) => {
     const e = npc[i];
     return h('div', { class: 'np-row' + (i === NP.sel ? ' sel' : '') + (e.locked ? ' locked' : ''), style: `padding-left:${8 + depth * 16}px`,
-      onclick: () => { npGoTo(i); } },
+      'data-i': i, onclick: () => { if (i - (i % 4) === NP.lvl) npSelect(i); else npGoTo(i); },
+      ondblclick: () => { if (e.does === 0) npOpenSub(i); }, title: e.does === 0 ? 'Двойной клик — открыть подменю' : '' },
       h('span', { class: 'np-dir' }, NP_DIRS[i % 4]), npIconEl(e.icon, 16), h('span', { class: 'np-name' }, e.name),
       e.locked ? h('span', { title: 'заблокировано' }, '🔒') : null,
       h('span', { class: 'np-badge d' + e.does }, NP_DOES[e.does] || e.does));
@@ -152,7 +153,7 @@ function npRenderWheel() {
   NP.trail.forEach((k, j) => { crumbs.push(' › ', h('a', { onclick: () => { NP.lvl = npc[k].attr; NP.trail = NP.trail.slice(0, j + 1); NP.sel = NP.lvl; npRender(); } }, npc[k].name)); });
   const card = d => {
     const i = base + d, e = npc[i]; if (!e) return h('div', { class: 'np-card empty' }, '—');
-    return h('div', { class: 'np-card pos' + d + (i === NP.sel ? ' sel' : '') + (e.locked ? ' locked' : ''), onclick: () => { NP.sel = i; npRender(); },
+    return h('div', { class: 'np-card pos' + d + (i === NP.sel ? ' sel' : '') + (e.locked ? ' locked' : ''), 'data-i': i, onclick: () => npSelect(i),
       ondblclick: () => { if (e.does === 0) npOpenSub(i); }, title: e.does === 0 ? 'Двойной клик — открыть подменю' : '' },
       h('div', { class: 'np-card-dir' }, NP_DIRS[d]), npIconEl(e.icon, 32),
       h('div', { class: 'np-card-name' }, e.name), e.locked ? h('div', { class: 'np-lock' }, '🔒') : null,
@@ -163,6 +164,15 @@ function npRenderWheel() {
     h('div', { class: 'np-wheel' }, card(0), card(1), card(2), card(3),
       h('div', { class: 'np-hub' }, NP.trail.length ? h('button', { class: 'btn small', onclick: () => { const k = NP.trail.pop(); NP.lvl = NP.trail.length ? npc[NP.trail[NP.trail.length - 1]].attr : 0; NP.sel = k; npRender(); } }, '◂ назад (B)') : h('span', { class: 'tl-hint' }, 'корень колеса'))),
     h('div', { class: 'tl-hint' }, 'Так колесо выглядит в игре: крестовина выбирает направление, A — открыть, B — назад. Двойной клик по подменю — войти.'));
+}
+
+// Выбор записи без перерисовки всего экрана: иначе первый клик заменяет элементы,
+// и второй клик двойного щелчка уходит в пустоту (подменю не открывалось)
+function npSelect(i) {
+  if (NP.sel === i) return;
+  NP.sel = i;
+  $$('#npc .np-card, #npc .np-row').forEach(el => el.classList.toggle('sel', +el.dataset.i === i));
+  const old = $('#npc .np-insp'); if (old) old.replaceWith(npRenderInspector());
 }
 
 function npOpenSub(i) { const e = NP.m.npc[i]; NP.trail.push(i); NP.lvl = e.attr; NP.sel = e.attr; npRender(); }
