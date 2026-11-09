@@ -13,6 +13,7 @@
 ├── tools/              # хостовые утилиты-конвертеры (bmp/tmx/wav → .inc)
 │   ├── tmx2incl.cpp
 │   ├── wav2incl.cpp
+│   ├── gbadbg/         # отладчик на ядре mGBA (перемотка, тайлы/спрайты, diff памяти), см. его README
 │   ├── build_tools.sh
 │   └── clean.sh
 └── project/             # сборка самого рома
