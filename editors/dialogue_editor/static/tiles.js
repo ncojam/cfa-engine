@@ -166,6 +166,8 @@ function tlRenderHead(P) {
     h('label', null, 'Карта ', mapSel),
     h('label', null, 'Тайлсет ', tsSel),
     h('div', { class: 'spacer' }),
+    h('button', { class: 'btn small', title: 'Поменять местами состояния a и b этой пары (и их названия): что было слева/сверху, станет справа/снизу',
+      onclick: () => { const P = TL.pairs[i]; [P.a, P.b] = [P.b, P.a]; [P.name_a, P.name_b] = [P.name_b, P.name_a]; tlRender(); } }, '⇄ a ↔ b'),
     tlDirty(i) && i < TL.orig.length ? h('button', { class: 'btn small ghost', onclick: () => { TL.pairs[i] = tlClone(TL.orig[i]); tlRender(); } }, 'сбросить пару') : null,
     h('button', { class: 'btn', onclick: () => tlReload(), title: 'Перечитать supertiles.cpp и карты с диска' }, '⟳ С диска'),
     h('button', { class: 'btn primary' + (dirty ? ' dirty' : ''), disabled: !dirty || TL.busy, onclick: () => tlSave(), title: 'Записать в src/supertiles.cpp (Ctrl+S)' }, 'Сохранить'));
