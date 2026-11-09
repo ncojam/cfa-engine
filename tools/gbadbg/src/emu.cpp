@@ -168,7 +168,18 @@ void Emu::pumpAudio(bool play) {
 
 // ---------------- состояние и память ----------------
 void Emu::saveState(void* buf) { core->saveState(core, buf); }
-bool Emu::loadState(const void* buf) { return core->loadState(core, buf); }
+bool Emu::loadState(const void* buf) {
+	// GBADeserialize перезаписывает регистры DMA, и mGBA на выключенных каналах (источник 0) пишет
+	// «Invalid DMA source address: 0x00000000» - это не ошибка игры, в лог не берём
+	const bool r = replaying;
+	auto hook = std::move(errorHook);
+	replaying = true;
+	errorHook = nullptr;
+	const bool ok = core->loadState(core, buf);
+	replaying = r;
+	errorHook = std::move(hook);
+	return ok;
+}
 
 uint8_t* Emu::mem(Region r, size_t* size) {
 	size_t s = 0;
