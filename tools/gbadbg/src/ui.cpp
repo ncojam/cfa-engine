@@ -1,5 +1,6 @@
 // Окна отладчика: таймлайн, лог, трассировка кадра, исходник, лента активности.
 #include <algorithm>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -10,6 +11,61 @@
 namespace gbadbg {
 
 static const double kFrameCycles = 280896.0;
+
+// ============================ текст для копирования ============================
+
+static std::string fmt(const char* f, ...) IM_FMTARGS(1);
+static std::string fmt(const char* f, ...) {
+	char b[1024];
+	va_list ap;
+	va_start(ap, f);
+	vsnprintf(b, sizeof(b), f, ap);
+	va_end(ap);
+	return b;
+}
+
+static std::string stackText(App& a, const std::vector<StackPos>& st) {
+	std::string s;
+	for (int i = 0; i < (int)st.size(); i++)
+		s += fmt("  %2d  %-40s %-34s [%08X]\n", i, a.syms.shortName(st[i].fn).c_str(), a.syms.where(st[i].addr).c_str(), st[i].addr);
+	return s;
+}
+
+static std::string eventText(App& a, const TraceEvent& e) {
+	return fmt("%s @ instr %llu, pc %08X (%s)  %s\n", e.kind == TraceEvent::ERROR ? "ERROR" : "WRITE",
+		(unsigned long long)e.step, e.pc, a.syms.where(e.pc).c_str(), e.text.c_str()) + stackText(a, e.stack);
+}
+
+// Всё важное о показанном кадре одним текстом - вставить в чат / баг-репорт
+static std::string reportText(App& a) {
+	std::string s = fmt("gbadbg report: frame %lld\n", (long long)a.view);
+	if (a.paused && !a.pauseReason.empty()) s += "pause: " + a.pauseReason + "\n";
+	if (a.view >= 0 && a.marks.count((uint32_t)a.view)) s += "marked bad: " + a.marks[(uint32_t)a.view] + "\n";
+
+	s += "\n-- log (this frame) --\n";
+	for (const LogLine& l : a.emu.log)
+		if ((int64_t)l.frame == a.view) s += fmt("%s: %s%s\n", l.cat.c_str(), l.text.c_str(), l.repeat > 1 ? fmt("  (x%d)", l.repeat).c_str() : "");
+
+	const Trace& t = a.trace;
+	if (t.frame == a.view && t.frame >= 0) {
+		s += fmt("\n-- trace: %llu instructions, %.1f%% of frame --\n", (unsigned long long)t.steps, t.cycles * 100.0 / kFrameCycles);
+		if (t.watchLen) s += fmt("watch %08X +%u %s\n", t.watchAddr, t.watchLen, a.syms.dataName(t.watchAddr).c_str());
+		for (const TraceEvent& e : t.events) s += eventText(a, e);
+		s += "end of frame stack:\n" + stackText(a, t.endStack);
+		s += "top functions by cycles:\n";
+		for (int i = 0; i < (int)t.flat.size() && i < 15; i++)
+			s += fmt("  %5.2f%%  x%-4u %s\n", t.flat[i].self * 100.0 / kFrameCycles, t.flat[i].calls, a.syms.shortName(t.flat[i].fn).c_str());
+	}
+	if (a.diff.frame == a.view && a.diff.frame >= 0) {
+		s += "\n-- memory changed this frame --\n";
+		for (const RegionDiff& r : a.diff.regions) {
+			s += fmt("%-8s %zu bytes, %zu ranges\n", r.info.name, r.changed, r.ranges.size());
+			for (int k = 0; k < (int)r.ranges.size() && k < 12; k++)
+				s += fmt("    %08X +%u %s\n", r.info.base + r.ranges[k].first, r.ranges[k].second, a.syms.dataName(r.info.base + r.ranges[k].first).c_str());
+		}
+	}
+	return s;
+}
 
 // ============================ таймлайн ============================
 
@@ -79,6 +135,16 @@ void timelineWindow(App& a, uint32_t liveKeys) {
 
 	ImGui::SeparatorText("Error frames");
 	if (a.errorFrames.empty()) ImGui::TextDisabled("none");
+	else if (ImGui::SmallButton("copy list")) {
+		std::string s;
+		for (uint32_t f : a.errorFrames) {
+			const char* text = "";
+			for (auto l = a.emu.log.rbegin(); l != a.emu.log.rend(); ++l)
+				if (l->frame == f && l->isError()) { text = l->text.c_str(); break; }
+			s += fmt("%u  %s\n", f, text);
+		}
+		ImGui::SetClipboardText(s.c_str());
+	}
 	int shown = 0;
 	for (auto it = a.errorFrames.rbegin(); it != a.errorFrames.rend() && shown < 50; ++it) {
 		if (*it < first) break;
@@ -116,6 +182,8 @@ void logWindow(App& a) {
 	ImGui::SameLine(); ImGui::SetNextItemWidth(200);
 	ImGui::InputTextWithHint("##flt", "filter", filter, sizeof(filter));
 	ImGui::SameLine(); if (ImGui::SmallButton("clear")) a.emu.log.clear();
+	ImGui::SameLine(); const bool copy = ImGui::SmallButton("copy");
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("copy shown lines (filter applies) to clipboard");
 
 	ImGui::BeginChild("lines", ImVec2(0, 0), 0, ImGuiWindowFlags_HorizontalScrollbar);
 	std::vector<int> idx;
@@ -125,6 +193,14 @@ void logWindow(App& a) {
 		if (errorsOnly && !l.isError()) continue;
 		if (filter[0] && l.text.find(filter) == std::string::npos && l.cat.find(filter) == std::string::npos) continue;
 		idx.push_back(i);
+	}
+	if (copy) {
+		std::string s;
+		for (int k = std::max(0, (int)idx.size() - 5000); k < (int)idx.size(); k++) {
+			const LogLine& l = a.emu.log[idx[k]];
+			s += fmt("%u  %s  %s%s\n", l.frame, l.cat.c_str(), l.text.c_str(), l.repeat > 1 ? fmt("  (x%d)", l.repeat).c_str() : "");
+		}
+		ImGui::SetClipboardText(s.c_str());
 	}
 	ImGuiListClipper clip;
 	clip.Begin((int)idx.size());
@@ -194,6 +270,9 @@ void traceWindow(App& a) {
 	ImGui::BeginDisabled(a.view < 0);
 	if (ImGui::Button("Trace shown frame")) { if (!a.paused) a.pause(); a.traceView(); }
 	ImGui::EndDisabled();
+	ImGui::SameLine();
+	if (ImGui::Button("Copy report")) ImGui::SetClipboardText(reportText(a).c_str());
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("frame log, errors with call stacks, top functions, changed memory - as text");
 
 	const Trace& t = a.trace;
 	if (t.frame < 0) { ImGui::TextDisabled("no trace yet"); ImGui::End(); return; }
@@ -212,6 +291,8 @@ void traceWindow(App& a) {
 				const TraceEvent& e = t.events[i];
 				ImGui::PushID(i);
 				const ImVec4 col = e.kind == TraceEvent::ERROR ? ImVec4(1, 0.4f, 0.4f, 1) : ImVec4(0.5f, 0.85f, 1, 1);
+				if (ImGui::SmallButton("copy")) ImGui::SetClipboardText(eventText(a, e).c_str());
+				ImGui::SameLine();
 				ImGui::TextColored(col, "%s @ instr %llu, pc %08X  %s", e.kind == TraceEvent::ERROR ? "ERROR" : "WRITE",
 					(unsigned long long)e.step, e.pc, e.text.c_str());
 				stackList(a, e.stack, "st");

@@ -30,14 +30,27 @@ std::vector<StackPos> Tracer::snapshot(uint32_t pc) const {
 	return s;
 }
 
+void Tracer::popTop() {
+	const Frame& f = stack.back();
+	t->nodes[f.node].incl += clock - f.enter;
+	stack.pop_back();
+}
+
+// user и system - один банк регистров (один стек)
+static unsigned stackBank(unsigned mode) { return mode == 0x1F ? 0x10 : mode; }
+
 // PC ушёл не на следующую инструкцию: возврат, вызов или переход
-void Tracer::branch(uint32_t pc, uint32_t prevNext, uint32_t lr, uint32_t sp) {
-	// возвраты (в т.ч. из нескольких хвостовых вызовов сразу)
-	while (!stack.empty() && stack.back().ret == pc && sp >= stack.back().sp) {
-		const Frame& f = stack.back();
-		t->nodes[f.node].incl += clock - f.enter;
-		stack.pop_back();
+void Tracer::branch(uint32_t pc, uint32_t prevNext, uint32_t lr, uint32_t sp, unsigned mode) {
+	mode = stackBank(mode);
+	// возврат: ищем кадр с этим адресом возврата не только на вершине - если возврат из какой-то
+	// функции пропустили, он снимется здесь вместе с ней (и хвостовые вызовы - заодно)
+	for (int i = (int)stack.size() - 1, k = 0; i >= 0 && k < 64; i--, k++) {
+		const Frame& f = stack[i];
+		if (f.ret == pc && f.mode == mode && sp >= f.sp)
+			while ((int)stack.size() > i) popTop();
 	}
+	// кадры того же стека, вошедшие при SP ниже текущего, уже завершились (SP поднялся выше)
+	while (!stack.empty() && stack.back().mode == mode && stack.back().sp < sp) popTop();
 	const int fn = syms.funcStart(pc);
 	const int prevFn = curFn;
 	curFn = syms.funcAt(pc);
@@ -48,7 +61,7 @@ void Tracer::branch(uint32_t pc, uint32_t prevNext, uint32_t lr, uint32_t sp) {
 	const int node = childOf(*t, parentNode, fn);
 	t->nodes[node].calls++;
 	if (stack.size() >= 512) stack.erase(stack.begin());   // защита от разбегания
-	stack.push_back({ fn, lr & ~1u, sp, clock, node });
+	stack.push_back({ fn, lr & ~1u, sp, clock, node, mode });
 	int& fi = flatIndex[fn + 1];
 	if (fi < 0) { fi = (int)t->flat.size(); t->flat.push_back({ fn, 0, 0, stack.size() > 1 ? stack[stack.size() - 2].fn : prevFn }); }
 	t->flat[fi].calls++;
@@ -108,7 +121,7 @@ void Tracer::runFrame(Emu& emu, uint32_t keys, bool audio, Trace& out, uint32_t 
 		while (cpu->cycles < cpu->nextEvent) {
 			const uint32_t len = cpu->cpsr.t ? 2 : 4;
 			const uint32_t pc = (uint32_t)cpu->gprs[ARM_PC] - 2 * len;
-			if (pc != expect) branch(pc, expect, (uint32_t)cpu->gprs[ARM_LR], (uint32_t)cpu->gprs[ARM_SP]);
+			if (pc != expect) branch(pc, expect, (uint32_t)cpu->gprs[ARM_LR], (uint32_t)cpu->gprs[ARM_SP], cpu->cpsr.priv);
 			lastPc = pc;
 			const int32_t c0 = cpu->cycles;
 			ARMRun(cpu);

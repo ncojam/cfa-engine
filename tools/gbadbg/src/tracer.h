@@ -48,8 +48,9 @@ public:
 	void runFrame(Emu& emu, uint32_t keys, bool audio, Trace& out, uint32_t watchAddr = 0, uint32_t watchLen = 0);
 
 private:
-	struct Frame { int fn; uint32_t ret, sp; uint64_t enter; int node; };
-	void branch(uint32_t pc, uint32_t prevNext, uint32_t lr, uint32_t sp);
+	struct Frame { int fn; uint32_t ret, sp; uint64_t enter; int node; unsigned mode; };
+	void branch(uint32_t pc, uint32_t prevNext, uint32_t lr, uint32_t sp, unsigned mode);
+	void popTop();
 	std::vector<StackPos> snapshot(uint32_t pc) const;
 
 	Symbols& syms;

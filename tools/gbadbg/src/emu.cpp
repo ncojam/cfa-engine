@@ -97,6 +97,8 @@ bool Emu::load(const std::string& romPath, const std::string& savePath, std::str
 	}
 
 	mCoreInitConfig(core, "gbadbg");
+	// без значения по умолчанию opts.volume = 0 -> ядро выдаёт тишину (mGBA берёт громкость из конфига)
+	mCoreConfigSetDefaultIntValue(&core->config, "volume", 0x100);
 	mCoreLoadConfig(core);
 	core->setAudioBufferSize(core, 4096);
 	core->reset(core);
