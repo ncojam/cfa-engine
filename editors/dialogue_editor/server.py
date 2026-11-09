@@ -673,9 +673,35 @@ def api_tiles_map(tmx):
     return stcore.read_tmx(os.path.join(stcore.paths(CFG['project'])['resources'], _safe_name(tmx, '.tmx')))
 
 
+def _tmx_path(tmx):
+    return os.path.join(stcore.paths(CFG['project'])['resources'], _safe_name(tmx, '.tmx'))
+
+
+def _file_hash(p):
+    with open(p, 'rb') as f:
+        return hashlib.sha1(f.read()).hexdigest()
+
+
+def api_tiles_fg(tmx):
+    p = _tmx_path(tmx)
+    return {"tmx": os.path.basename(p), "list": stcore.read_fgtiles(p), "hash": _file_hash(p)}
+
+
 def api_tiles_save(body):
-    if body.get('hash') != _st_hash() and not body.get('force'):
-        return 409, {"error": "supertiles.cpp изменился на диске после загрузки. Перечитайте или сохраните принудительно."}
+    fg = body.get('fg') or []
+    if not body.get('force'):
+        if body.get('edits') and body.get('hash') != _st_hash():
+            return 409, {"error": "supertiles.cpp изменился на диске после загрузки. Перечитайте или сохраните принудительно."}
+        for f in fg:
+            if _file_hash(_tmx_path(f['tmx'])) != f.get('hash'):
+                return 409, {"error": "%s изменился на диске после загрузки (Tiled?). Перечитайте или сохраните принудительно." % f['tmx']}
+    stamp = time.strftime('%Y%m%d_%H%M%S')
+    new_ids = {}
+    for f in fg:
+        tp = _tmx_path(f['tmx'])
+        os.makedirs(os.path.join(HERE, 'backups'), exist_ok=True)
+        shutil.copy2(tp, os.path.join(HERE, 'backups', '%s_%s' % (stamp, os.path.basename(tp))))
+        new_ids[f['tmx']] = stcore.save_fgtiles(tp, f.get('changed') or [], f.get('added') or [], f.get('deleted') or [])
     p = _st_table()
     with open(p, encoding='utf-8') as f:
         old = f.read()
@@ -685,8 +711,9 @@ def api_tiles_save(body):
         shutil.copy2(p, os.path.join(HERE, 'backups', 'supertiles_%s.cpp' % time.strftime('%Y%m%d_%H%M%S')))
         with open(p, 'w', encoding='utf-8', newline='\n') as f:
             f.write(new)
+    if new != old or fg:
         stcore.refresh_usage(CFG['project'])
-    return 200, dict(api_tiles_state(), ok=True, changed=new != old)
+    return 200, dict(api_tiles_state(), ok=True, changed=(new != old) or bool(fg), newIds=new_ids)
 
 
 # ------------------------------------------------------------------ вкладка «Группы»
@@ -794,6 +821,8 @@ class Handler(BaseHTTPRequestHandler):
                         return self._send(200, api_tiles_state())
                     if path == '/api/tiles/tileset':
                         return self._send(200, api_tiles_tileset(q.get('bmp'), q.get('unless') == '1'))
+                    if path == '/api/tiles/fg':
+                        return self._send(200, api_tiles_fg(q.get('tmx')))
                     if path == '/api/tiles/map':
                         return self._send(200, api_tiles_map(q.get('tmx')))
             if path == '/api/groups/state':

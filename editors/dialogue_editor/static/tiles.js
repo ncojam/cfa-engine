@@ -10,12 +10,13 @@ const TL = {
   bmp: null, tmx: null, view: 'sel', zoom: store.get('tl.zoom', 2), perRow: store.get('tl.perRow', 32),
   mapZoom: store.get('tl.mapZoom', 1), mark: store.get('tl.mark', true), filter: '',
   sets: {}, maps: {}, drag: null, busy: false,
+  fgs: {}, fgSel: null, fgSeq: 0, fgShow: store.get('tl.fgShow', true), fgAll: store.get('tl.fgAll', false), fgFocus: false,
 };
 
 const tlClone = o => JSON.parse(JSON.stringify(o));
 const tlKey = p => JSON.stringify([p.a.to, p.a.from, p.a.len, p.b.to, p.b.from, p.b.len, p.name_a, p.name_b]);
 const tlDirty = i => i >= TL.orig.length || tlKey(TL.pairs[i]) !== tlKey(TL.orig[i]);
-const tlAnyDirty = () => TL.pairs.some((_, i) => tlDirty(i));
+const tlAnyDirty = () => TL.pairs.some((_, i) => tlDirty(i)) || Object.keys(TL.fgs || {}).some(tlFgDirty);
 const tlUse = i => [...new Set([...(TL.state.use[2 * i] || []), ...(TL.state.use[2 * i + 1] || [])])].sort();
 const tlMapOf = where => 'map-' + where.split(' ')[0] + '.tmx';
 
@@ -42,15 +43,15 @@ function tlIngest(st, keepSel) {
   TL.pairs = tlClone(st.pairs);
   TL.orig = tlClone(st.pairs);
   if (!keepSel) TL.sel = Math.min(store.get('tl.sel', 0), TL.pairs.length - 1);
-  tlPick(TL.sel, true);
+  tlPick(TL.sel, true, keepSel && !!TL.tmx);   // после сохранения/перечитывания остаёмся на той же карте
 }
 
 // выбрать пару; карта/тайлсет по умолчанию - из «где используется»
-function tlPick(i, force) {
+function tlPick(i, force, keepMap) {
   if (i < 0 || i >= TL.pairs.length) return;
   const changed = force || i !== TL.sel;
   TL.sel = i; store.set('tl.sel', i);
-  if (changed) {
+  if (changed && !keepMap) {
     const use = tlUse(i).map(tlMapOf);
     const maps = TL.state.maps.map(m => m.tmx);
     const tmx = use.find(m => maps.includes(m));
@@ -132,7 +133,7 @@ function tlRenderList() {
           h('span', { class: 'tl-hint' }, ' portTo')));
       } else list.append(h('div', { class: 'tl-note' }, n));
     }
-    list.append(h('div', { class: 'tl-item' + (i === TL.sel ? ' sel' : '') + (tlDirty(i) ? ' dirty' : ''), onclick: () => tlPick(i) },
+    list.append(h('div', { class: 'tl-item' + (i === TL.sel ? ' sel' : '') + (tlDirty(i) ? ' dirty' : ''), onclick: () => { const f = tlFgSelObj(); if (f && tlFgPair(f) !== i) TL.fgSel = null; TL.fgFocus = true; tlPick(i); } },
       h('div', { class: 'tl-item-t' }, h('span', { class: 'tl-idx' }, `${2 * i}|${2 * i + 1}`), ` ${p.name_a || '?'} → ${p.name_b || '?'}`),
       h('div', { class: 'tl-item-u' }, use.length ? use.map(tlLevelChip) : h('span', { class: 'tl-hint' }, 'нигде не используется'))));
   });
@@ -235,10 +236,16 @@ function tlRenderMap() {
       btn('none', 'без подмены'), btn('a', `${2 * TL.sel}`), btn('b', `${2 * TL.sel + 1}`), btn('sel', 'выбранное'),
       h('label', { title: 'Обвести на карте (жёлтым) области, нарисованные тайлами из «куда»' },
         h('input', { type: 'checkbox', checked: TL.mark, onchange: e => { TL.mark = e.target.checked; store.set('tl.mark', TL.mark); tlMapPaint(); } }), ' обвести'),
+      h('label', { title: 'Показывать fgtile на карте' }, h('input', { type: 'checkbox', checked: TL.fgShow, onchange: e => { TL.fgShow = e.target.checked; store.set('tl.fgShow', TL.fgShow); tlMapPaint(); } }), ' fgtile'),
+      h('label', { title: 'Показывать и остальные fgtile (двери без подмены, телепорты, кровать…)' }, h('input', { type: 'checkbox', checked: TL.fgAll, onchange: e => { TL.fgAll = e.target.checked; store.set('tl.fgAll', TL.fgAll); tlMapPaint(); } }), ' все'),
+      h('button', { class: 'btn small', onclick: () => tlFgAdd(false), title: 'Новый триггер подмены для выбранной пары - в центр видимой части карты' }, '+ fgtile'),
+      h('button', { class: 'btn small', onclick: () => tlFgAdd(true), title: 'Новая пара в конец таблицы и триггер для неё' }, '+ пара с fgtile'),
       h('div', { class: 'spacer' }),
+      h('button', { class: 'btn small', onclick: () => tlFgFocus() || toast('У этой пары нет fgtile на этой карте'), title: 'Приблизить к fgtile выбранной пары' }, '→ к fgtile'),
       h('button', { class: 'btn small', onclick: () => tlMapFit('all'), title: 'Вся карта' }, '⤢ целиком'),
       h('button', { class: 'btn small', onclick: () => tlMapFit('change'), title: 'Приблизить к меняемым местам' }, '→ к изменениям'),
       h('span', { id: 'tlMapZoom', class: 'tl-hint' }, '')),
+    h('div', { class: 'tl-fg-bar', id: 'tlFgBar' }),
     h('div', { class: 'tl-map-wrap', id: 'tlMapWrap' }, TL.tmx ? h('canvas', { id: 'tlMap' }) : h('div', { class: 'tl-hint', style: 'padding:12px' }, 'Карта не выбрана — выберите в шапке.')),
     h('div', { class: 'tl-hint', id: 'tlMapHover' }, 'колёсико — масштаб, средняя (или левая) кнопка — двигать карту'));
 }
@@ -258,7 +265,7 @@ async function tlDraw() {
   if (!tlDraw.seen || tlDraw.seen !== ts.bmp) { tlDraw.seen = ts.bmp; tlChanged(true); }
   tlDrawSet(ts, P);
   if (TL.tmx) {
-    try { tlDrawMap(ts, await tlMap(TL.tmx)); } catch (e) { toast('Карта: ' + e.message, 'err'); }
+    try { await tlFgLoad(TL.tmx); tlDrawMap(ts, await tlMap(TL.tmx)); tlFgRenderBar(); if (TL.fgFocus) { TL.fgFocus = false; tlFgFocus(); } } catch (e) { toast('Карта: ' + e.message, 'err'); }
   }
 }
 
@@ -441,7 +448,15 @@ function tlMapBind() {
   cv.addEventListener('mousedown', e => {
     if (e.button !== 1 && e.button !== 0) return;
     e.preventDefault();   // средняя кнопка: без автопрокрутки браузера
-    TL.pan = { x: e.clientX, y: e.clientY, ox: TL.mv.ox, oy: TL.mv.oy };
+    if (e.button === 0) {
+      const r = cv.getBoundingClientRect(), hit = tlFgHit(e.clientX - r.left, e.clientY - r.top);
+      if (hit) {
+        const f = hit.f; tlFgSelect(f, true);
+        TL.fgDrag = { id: f.id, mode: hit.mode, x: e.clientX, y: e.clientY, fx: f.x, fy: f.y, route: parseInt(f.props.route, 10) || 1, num: parseInt(f.props.num, 10) || 1, moved: false };
+        return;
+      }
+    }
+    TL.pan = { x: e.clientX, y: e.clientY, ox: TL.mv.ox, oy: TL.mv.oy, moved: false, left: e.button === 0 };
     cv.style.cursor = 'grabbing';
   });
   cv.addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
@@ -450,12 +465,26 @@ function tlMapBind() {
 // перетаскивание карты и подсказка под курсором - один раз на всё окно
 addEventListener('mousemove', e => {
   const cv = $('#tlMap');
-  if (TL.pan && TL.mv) { TL.mv.ox = TL.pan.ox + e.clientX - TL.pan.x; TL.mv.oy = TL.pan.oy + e.clientY - TL.pan.y; tlMapPaint(); return; }
+  if (TL.fgDrag && TL.mv) {
+    const d = TL.fgDrag, f = tlFgSelObj(); if (!f || f.id !== d.id) { TL.fgDrag = null; return; }
+    const dx = (e.clientX - d.x) / TL.mv.s, dy = (e.clientY - d.y) / TL.mv.s;
+    if (!d.moved && Math.abs(e.clientX - d.x) + Math.abs(e.clientY - d.y) < 4) return;
+    d.moved = true;
+    if (d.mode === 'resize') {
+      f.props.route = String(Math.max(1, d.route + Math.round(dx / 8))); f.props.num = String(Math.max(1, d.num + Math.round(dy / 8)));
+      f.w = +f.props.route * 8; f.h = +f.props.num * 8;
+    } else { f.x = Math.max(0, Math.round((d.fx + dx) / 8) * 8); f.y = Math.max(0, Math.round((d.fy + dy) / 8) * 8); }
+    tlMapPaint(); return;
+  }
+  if (TL.pan && TL.mv) { if (Math.abs(e.clientX - TL.pan.x) + Math.abs(e.clientY - TL.pan.y) > 3) TL.pan.moved = true; TL.mv.ox = TL.pan.ox + e.clientX - TL.pan.x; TL.mv.oy = TL.pan.oy + e.clientY - TL.pan.y; tlMapPaint(); return; }
   if (!cv || e.target !== cv || !TL.mv) return;
   const r = cv.getBoundingClientRect(), wx = Math.floor((e.clientX - r.left - TL.mv.ox) / TL.mv.s / 8), wy = Math.floor((e.clientY - r.top - TL.mv.oy) / TL.mv.s / 8);
   const hv = $('#tlMapHover'); if (hv) hv.textContent = `клетка ${wx}, ${wy} (пиксели ${wx * 8}, ${wy * 8}) · колёсико — масштаб, средняя/левая кнопка — двигать`;
 });
-addEventListener('mouseup', () => { if (TL.pan) { TL.pan = null; const c = $('#tlMap'); if (c) c.style.cursor = ''; } });
+addEventListener('mouseup', () => {
+  if (TL.fgDrag) { const moved = TL.fgDrag.moved; TL.fgDrag = null; if (moved) tlFgChanged(); }
+  if (TL.pan) { const click = TL.pan.left && !TL.pan.moved; TL.pan = null; const c = $('#tlMap'); if (c) c.style.cursor = ''; if (click && TL.fgSel) { TL.fgSel = null; tlFgChanged(); } }
+});
 
 function tlMapFitScale(bw, bh) {
   const wrap = $('#tlMapWrap'), mv = TL.mv; if (!wrap || !mv) return 1;
@@ -492,6 +521,7 @@ function tlMapPaint() {
     g.strokeStyle = 'rgba(0,0,0,.85)'; g.lineWidth = 4; tlOutline(g, TL.marked, c, toPx);   // тёмная подложка - видно на любом фоне
     g.strokeStyle = '#ffd400'; g.lineWidth = 2; tlOutline(g, TL.marked, c, toPx);
   }
+  tlFgDraw(g, mv);
   const z = $('#tlMapZoom'); if (z) z.textContent = `${Math.round(mv.s * 100)}%`;
 }
 
@@ -505,7 +535,7 @@ function tlAddPair() {
 
 async function tlReload() {
   if (tlAnyDirty() && !confirm('Есть несохранённые правки подмены тайлов. Перечитать с диска и потерять их?')) return;
-  TL.sets = {}; TL.maps = {}; TL.state = null;
+  TL.sets = {}; TL.maps = {}; TL.fgs = {}; TL.fgSel = null; TL.state = null;
   await tlLoad(true);
   toast('Перечитано с диска');
 }
@@ -516,14 +546,19 @@ async function tlSave(force) {
     if (!tlDirty(i)) return;
     edits.push({ idx: i < TL.orig.length ? i : null, a: p.a, b: p.b, name_a: p.name_a, name_b: p.name_b });
   });
-  if (!edits.length) return;
+  const fg = tlFgPayload();
+  if (!edits.length && !fg.length) return;
   const bad = TL.pairs.flatMap((p, i) => tlDirty(i) ? ['a', 'b'].flatMap(k => tlIssues(p[k], TL.sets[TL.bmp]).filter(x => x[0] === 'err').map(x => `[${2 * i + (k === 'b')}] ${x[1]}`)) : []);
   if (bad.length && !confirm('Есть ошибки:\n' + bad.slice(0, 6).join('\n') + '\n\nВсё равно сохранить?')) return;
   TL.busy = true;
   try {
-    const st = await api('/api/tiles/save', { hash: TL.state.hash, edits, force: !!force });
+    const st = await api('/api/tiles/save', { hash: TL.state.hash, edits, fg, force: !!force });
+    // новые fgtile получили id в tmx - выбранный остаётся выбранным
+    const nid = TL.fgSel && typeof TL.fgSel === 'string' && TL.tmx && st.newIds && st.newIds[TL.tmx];
+    if (nid) { const F = tlFgCur(); const k = F.list.filter(f => typeof f.id === 'string').findIndex(f => f.id === TL.fgSel); TL.fgSel = k >= 0 ? nid[k] : null; }
+    TL.fgs = {};
     tlIngest(st, true);
-    toast(st.changed ? 'supertiles.cpp сохранён' : 'Без изменений', 'ok');
+    toast(st.changed ? (fg.length ? 'Сохранено: supertiles.cpp и ' + fg.map(x => x.tmx).join(', ') + ' — пересоберите графику (build_graphics.sh)' : 'supertiles.cpp сохранён') : 'Без изменений', 'ok');
   } catch (e) {
     if (e.status === 409 && confirm(e.message + '\n\nПерезаписать файл своими правками?')) { TL.busy = false; return tlSave(true); }
     toast('Не сохранено: ' + e.message, 'err');
@@ -537,3 +572,204 @@ addEventListener('keydown', e => {
   else if (e.altKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); tlPick(TL.sel + (e.key === 'ArrowDown' ? 1 : -1)); }
 });
 addEventListener('beforeunload', e => { if (tlAnyDirty()) { e.preventDefault(); e.returnValue = ''; } });
+
+// ============================================================ fgtile на карте
+// Триггер подмены: область начинается в клетке (x/8, y/8) из tmx, ширина route клеток,
+// высота num клеток (hitBoxx в fgtile.cpp). turn 0: слева - состояние treetype, справа - +1;
+// turn 1: сверху / снизу. Двери (portTo) со switch2dial/switchTile меняют тайлы на карте назначения.
+
+const tlFgDirty = tmx => { const F = TL.fgs[tmx]; return !!F && JSON.stringify(F.list) !== F.orig; };
+const tlFgPair = f => {
+  const p = f.props;
+  if (f.kind === 'trigger') return (parseInt(p.treetype, 10) || 0) >> 1;
+  const v = parseInt(p.switch2dial ?? '-1', 10); const w = parseInt(p.switchTile ?? '-1', 10);
+  return v >= 0 ? v >> 1 : w >= 0 ? w >> 1 : -1;
+};
+const tlFgLinked = f => {
+  if (f.kind === 'trigger') return tlFgPair(f) === TL.sel;
+  if (f.kind === 'door') return ['switch2dial', 'switchTile'].some(k => { const v = parseInt(f.props[k] ?? '-1', 10); return v >= 0 && (v >> 1) === TL.sel; });
+  return false;
+};
+function tlFgRect(f) {
+  if (f.kind === 'trigger') {
+    const x = Math.floor(f.x / 8) * 8, y = Math.floor(f.y / 8) * 8;
+    return [x, y, Math.max(1, parseInt(f.props.route, 10) || 0) * 8, Math.max(1, parseInt(f.props.num, 10) || 0) * 8];
+  }
+  return [f.x, f.y, f.w || 16, f.h || 16];
+}
+const tlFgVisible = f => TL.fgShow && (f.kind !== 'other' || TL.fgAll);
+const tlFgCur = () => TL.tmx && TL.fgs[TL.tmx];
+const tlFgSelObj = () => { const F = tlFgCur(); return F && F.list.find(f => f.id === TL.fgSel); };
+
+async function tlFgLoad(tmx) {
+  if (!TL.fgs[tmx]) {
+    const j = await api(`/api/tiles/fg?tmx=${encodeURIComponent(tmx)}`);
+    TL.fgs[tmx] = { list: j.list, orig: JSON.stringify(j.list), hash: j.hash };
+  }
+  return TL.fgs[tmx];
+}
+
+function tlFgDraw(g, mv) {
+  const F = tlFgCur(); if (!F || !TL.fgShow) return;
+  const big = 8 * mv.s >= 6;
+  g.save();
+  g.font = '600 11px ui-monospace, monospace'; g.textBaseline = 'bottom';
+  const order = F.list.filter(tlFgVisible).sort((a, b) => (tlFgLinked(a) - tlFgLinked(b)) || ((a.id === TL.fgSel) - (b.id === TL.fgSel)));
+  for (const f of order) {
+    const [x, y, w, hh] = tlFgRect(f), sx = mv.ox + x * mv.s, sy = mv.oy + y * mv.s, sw = Math.max(3, w * mv.s), sh = Math.max(3, hh * mv.s);
+    const linked = tlFgLinked(f), sel = f.id === TL.fgSel;
+    if (f.kind === 'trigger') {
+      g.fillStyle = linked ? 'rgba(0,220,255,.30)' : 'rgba(255,255,255,.10)';
+      g.strokeStyle = linked ? '#00e0ff' : 'rgba(255,255,255,.75)';
+      g.lineWidth = linked ? 2 : 1.5; g.setLineDash([]);
+    } else if (f.kind === 'door') {
+      g.fillStyle = linked ? 'rgba(255,160,40,.35)' : 'rgba(255,160,40,.12)';
+      g.strokeStyle = '#ffa028'; g.lineWidth = linked ? 2 : 1.2; g.setLineDash([4, 3]);
+    } else {
+      g.fillStyle = 'rgba(160,160,160,.08)'; g.strokeStyle = 'rgba(170,170,170,.6)'; g.lineWidth = 1; g.setLineDash([2, 3]);
+    }
+    g.fillRect(sx, sy, sw, sh);
+    if (sel) { g.save(); g.setLineDash([]); g.strokeStyle = '#000'; g.lineWidth = 5; g.strokeRect(sx, sy, sw, sh); g.restore(); g.strokeStyle = '#fff'; g.lineWidth = 2.5; g.setLineDash([]); }
+    g.strokeRect(sx, sy, sw, sh);
+    if (f.kind === 'trigger' && big) {   // где a, где b
+      g.save(); g.setLineDash([3, 3]); g.strokeStyle = 'rgba(255,255,255,.5)'; g.lineWidth = 1; g.beginPath();
+      if (f.props.turn === '1') { g.moveTo(sx, sy + sh / 2); g.lineTo(sx + sw, sy + sh / 2); } else { g.moveTo(sx + sw / 2, sy); g.lineTo(sx + sw / 2, sy + sh); }
+      g.stroke(); g.restore();
+    }
+    if (big || linked || sel) {
+      const tt = parseInt(f.props.treetype, 10);
+      const label = f.kind === 'trigger' ? `${tt}${f.props.turn === '1' ? '↕' : '↔'}${tt + 1}`
+        : f.kind === 'door' ? `🚪${f.props.switch2dial && f.props.switch2dial !== '-1' ? ' ' + f.props.switch2dial : ''}${f.props.switchTile && f.props.switchTile !== '-1' ? ' +' + f.props.switchTile : ''}` : '';
+      if (label) {
+        g.setLineDash([]); g.lineWidth = 3; g.strokeStyle = '#000'; g.strokeText(label, sx, sy - 2);
+        g.fillStyle = linked ? '#7ff0ff' : f.kind === 'door' ? '#ffc070' : '#fff'; g.fillText(label, sx, sy - 2);
+      }
+    }
+    if (sel && f.kind === 'trigger') { g.setLineDash([]); g.fillStyle = '#fff'; g.fillRect(sx + sw - 4, sy + sh - 4, 8, 8); g.strokeStyle = '#000'; g.lineWidth = 1; g.strokeRect(sx + sw - 4, sy + sh - 4, 8, 8); }
+  }
+  g.restore();
+}
+
+// попадание: сначала выбранный, потом связанные, потом остальные; угол выбранного триггера - ресайз
+function tlFgHit(mx, my) {
+  const F = tlFgCur(), mv = TL.mv; if (!F || !mv || !TL.fgShow) return null;
+  const sel = tlFgSelObj();
+  if (sel && sel.kind === 'trigger') {
+    const [x, y, w, hh] = tlFgRect(sel), ex = mv.ox + (x + w) * mv.s, ey = mv.oy + (y + hh) * mv.s;
+    if (Math.abs(mx - ex) <= 7 && Math.abs(my - ey) <= 7) return { f: sel, mode: 'resize' };
+  }
+  const cand = F.list.filter(tlFgVisible).sort((a, b) => ((b.id === TL.fgSel) - (a.id === TL.fgSel)) || (tlFgLinked(b) - tlFgLinked(a)) || ((a.kind === 'other') - (b.kind === 'other')));
+  for (const f of cand) {
+    const [x, y, w, hh] = tlFgRect(f), sx = mv.ox + x * mv.s, sy = mv.oy + y * mv.s;
+    const pad = 3;   // тонкие (1 клетка) триггеры тоже должны ловиться при малом масштабе
+    if (mx >= sx - pad && mx <= sx + Math.max(3, w * mv.s) + pad && my >= sy - pad && my <= sy + Math.max(3, hh * mv.s) + pad) return { f, mode: 'move' };
+  }
+  return null;
+}
+
+function tlFgSelect(f, fromMap) {
+  TL.fgSel = f ? f.id : null;
+  if (f) {
+    const p = tlFgPair(f);
+    if (p >= 0 && p < TL.pairs.length && p !== TL.sel) {   // tlPick перерисует всё
+      tlPick(p, false, true);
+      const it = $('.tl-item.sel'); if (it) it.scrollIntoView({ block: 'center' });
+      return;
+    }
+  }
+  tlFgRenderBar(); tlMapPaint();
+  if (fromMap && f) { const it = $('.tl-item.sel'); if (it) it.scrollIntoView({ block: 'nearest' }); }
+}
+
+function tlFgChanged() {
+  tlFgRenderBar(); tlMapPaint();
+  const sv = $('.tl-head .btn.primary'); if (sv) { sv.disabled = !tlAnyDirty(); sv.classList.toggle('dirty', tlAnyDirty()); }
+}
+
+function tlFgAdd(withPair) {
+  const F = tlFgCur(), mv = TL.mv, wrap = $('#tlMapWrap');
+  if (!F || !mv || !wrap) { toast('Сначала выберите карту'); return; }
+  if (withPair) tlAddPair();
+  const x = Math.max(0, Math.floor((wrap.clientWidth / 2 - mv.ox) / mv.s / 8) * 8), y = Math.max(0, Math.floor((wrap.clientHeight / 2 - mv.oy) / mv.s / 8) * 8);
+  const f = { id: 'n' + (++TL.fgSeq), x, y, w: 8, h: 96, kind: 'trigger', props: { treetype: String(2 * TL.sel), turn: '0', route: '1', num: '12' } };
+  tlFgCur().list.push(f);
+  TL.fgSel = f.id;
+  if (withPair) { tlRender(); } else tlFgChanged();
+  toast(`fgtile добавлен в центр карты: ${2 * TL.sel}↔${2 * TL.sel + 1}. Перетащите на место.`);
+}
+
+function tlFgDelete() {
+  const F = tlFgCur(), f = tlFgSelObj(); if (!F || !f) return;
+  F.list.splice(F.list.indexOf(f), 1); TL.fgSel = null; tlFgChanged();
+}
+
+function tlFgRenderBar() {
+  const bar = $('#tlFgBar'); if (!bar) return;
+  bar.innerHTML = '';
+  const f = tlFgSelObj();
+  if (!f) {
+    bar.append(h('span', { class: 'tl-hint' }, 'Клик по fgtile — выбрать (и его пару в списке) · тащить — двигать · белый уголок — размер · Del — удалить · стрелки — сдвиг на клетку'));
+    return;
+  }
+  const upd = (k, v, isProp = true) => { if (isProp) f.props[k] = String(v); else f[k] = v; if (f.kind === 'trigger') { f.w = (parseInt(f.props.route, 10) || 1) * 8; f.h = (parseInt(f.props.num, 10) || 1) * 8; } tlFgChanged(); };
+  const num = (label, k, val, isProp = true, title = '') => h('label', { class: 'tl-fg-f', title }, label,
+    h('input', { type: 'number', value: val, onchange: e => { upd(k, parseInt(e.target.value, 10) || 0, isProp); if (k === 'treetype' || k === 'switch2dial' || k === 'switchTile') tlFgSelect(f); } }));
+  const kindTxt = { trigger: 'триггер подмены', door: 'дверь', other: 'fgtile' }[f.kind];
+  bar.append(h('b', null, `${kindTxt} #${typeof f.id === 'string' ? 'новый' : f.id}`));
+  if (f.kind === 'trigger') {
+    const tt = parseInt(f.props.treetype, 10) || 0;
+    bar.append(num('treetype', 'treetype', tt, true, 'Номер состояния a (чётный); b = treetype+1'),
+      h('label', { class: 'tl-fg-f' }, 'turn', h('select', { onchange: e => upd('turn', e.target.value) },
+        h('option', { value: '0', selected: f.props.turn !== '1' }, '0 ↔ слева a / справа b'),
+        h('option', { value: '1', selected: f.props.turn === '1' }, '1 ↕ сверху a / снизу b'))),
+      num('ширина (route)', 'route', parseInt(f.props.route, 10) || 0, true, 'клеток по 8 px'),
+      num('высота (num)', 'num', parseInt(f.props.num, 10) || 0, true, 'клеток по 8 px'));
+    if (tt % 2) bar.append(h('span', { class: 'tl-issue warn' }, '⚠ нечётный treetype — возьмёт половины двух пар'));
+    if ((tt >> 1) >= TL.pairs.length) bar.append(h('span', { class: 'tl-issue err' }, '⛔ такой пары нет'));
+    if (f.props.num === '99' || f.props.num === '10') bar.append(h('span', { class: 'tl-issue err' }, '⛔ num 99/10 игра не считает подменой'));
+  } else if (f.kind === 'door') {
+    bar.append(num('switch2dial', 'switch2dial', parseInt(f.props.switch2dial ?? '-1', 10)), num('switchTile', 'switchTile', parseInt(f.props.switchTile ?? '-1', 10)),
+      h('span', { class: 'tl-hint' }, `portTo ${f.props.portTo} → ${(TL.state.levels || {})[f.props.portTo] || '?'}`));
+  } else {
+    bar.append(h('span', { class: 'tl-hint' }, Object.entries(f.props).map(([k, v]) => `${k}=${v}`).join(' · ')));
+  }
+  bar.append(num('x', 'x', f.x, false, 'пиксели'), num('y', 'y', f.y, false, 'пиксели'),
+    h('button', { class: 'btn small', onclick: tlFgDelete, title: 'Удалить fgtile (Del)' }, '🗑'));
+}
+
+function tlFgFocus() {   // приблизить к связанным с парой fgtile
+  const F = tlFgCur(), wrap = $('#tlMapWrap'), mv = TL.mv; if (!F || !wrap || !mv) return false;
+  const L = F.list.filter(tlFgLinked); if (!L.length) return false;
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  for (const f of L) { const [x, y, w, hh] = tlFgRect(f); x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x + w); y1 = Math.max(y1, y + hh); }
+  x0 -= 96; y0 -= 96; x1 += 96; y1 += 96;
+  const s = Math.min(3, tlMapFitScale(x1 - x0, y1 - y0));
+  mv.s = s; mv.ox = (wrap.clientWidth - (x1 - x0) * s) / 2 - x0 * s; mv.oy = (wrap.clientHeight - (y1 - y0) * s) / 2 - y0 * s;
+  tlMapPaint(); return true;
+}
+
+function tlFgPayload() {
+  const out = [];
+  for (const [tmx, F] of Object.entries(TL.fgs)) {
+    if (!tlFgDirty(tmx)) continue;
+    const orig = JSON.parse(F.orig), byId = new Map(orig.map(f => [f.id, JSON.stringify(f)]));
+    const ids = new Set(F.list.map(f => f.id));
+    out.push({
+      tmx, hash: F.hash,
+      changed: F.list.filter(f => typeof f.id === 'number' && byId.get(f.id) !== JSON.stringify(f)),
+      added: F.list.filter(f => typeof f.id === 'string'),
+      deleted: orig.filter(f => !ids.has(f.id)).map(f => f.id),
+    });
+  }
+  return out;
+}
+
+addEventListener('keydown', e => {
+  if (typeof TABS === 'undefined' || TABS.cur !== 'tiles' || !TL.fgSel) return;
+  const t = e.target; if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
+  const f = tlFgSelObj(); if (!f) return;
+  const d = { ArrowLeft: [-8, 0], ArrowRight: [8, 0], ArrowUp: [0, -8], ArrowDown: [0, 8] }[e.key];
+  if (d && !e.altKey) { e.preventDefault(); f.x = Math.max(0, f.x + d[0]); f.y = Math.max(0, f.y + d[1]); tlFgChanged(); }
+  else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); tlFgDelete(); }
+  else if (e.key === 'Escape') { TL.fgSel = null; tlFgChanged(); }
+});

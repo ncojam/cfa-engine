@@ -412,3 +412,7 @@ body:not(.tab-dialogs) #sidebar,body:not(.tab-dialogs) #issuesBadge,body:not(.ta
 .tl-lv{display:inline-flex;align-items:center;gap:3px;font-size:11px;background:#232833;border:1px solid var(--line2);border-radius:10px;padding:0 6px 0 2px;color:var(--text)}
 .tl-lv b{background:#4b3a72;color:#e7dcff;border-radius:8px;padding:0 5px;font-family:var(--mono);font-size:10px}
 .tl-lv i{font-style:normal}
+.tl-fg-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-height:30px;padding:3px 0 6px;font-size:12px}
+.tl-fg-f{display:flex;align-items:center;gap:4px;color:var(--muted)}
+.tl-fg-f input{width:72px;background:var(--bg2);border:1px solid var(--line2);border-radius:4px;padding:2px 5px;font-family:var(--mono)}
+.tl-fg-f select{background:var(--bg2);border:1px solid var(--line2);border-radius:4px;padding:2px 4px}

@@ -285,3 +285,140 @@ def read_tmx(path):
         layers.append({"name": name, "w": int(l.get("width")), "h": int(l.get("height")),
                        "walls": "wall" in name.lower(), "data": [v - 1 if v else 0 for v in vals]})
     return {"tmx": os.path.basename(path), "layers": layers}
+
+
+# ------------------------------------------------------------------ fgtile на карте (чтение / правка tmx)
+
+FG_OBJ_RE = re.compile(r'([ \t]*)<object\b([^>]*?)(/?)>(?:(.*?)</object>)?[ \t]*\r?\n?', re.S)
+FG_PROP_RE = re.compile(r'<property name="(\w+)"(?: type="\w+")? value="([^"]*)"\s*/>')
+
+
+def _attr(tag, name):
+    m = re.search(r'\b%s="([^"]*)"' % name, tag)
+    return m.group(1) if m else None
+
+
+def fg_kind(p):
+    """trigger - подмена тайлов (turn 0/1, без portTo), door - дверь со switch2dial/switchTile, other - прочее."""
+    is_door = p.get("portTo", "33") != "33"
+    if (not is_door and p.get("turn", "0") in ("0", "1") and p.get("num") not in ("99", "10")
+            and p.get("treetype") not in (None, "1", "20")):
+        return "trigger"
+    if is_door and (p.get("switch2dial", "-1") != "-1" or p.get("switchTile", "-1") != "-1"):
+        return "door"
+    return "other"
+
+
+def read_fgtiles(path):
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    out = []
+    for m in FG_OBJ_RE.finditer(text):
+        tag = m.group(2)
+        if _attr(tag, "type") != "fgtile":
+            continue
+        props = dict(FG_PROP_RE.findall(m.group(4) or ""))
+        out.append({"id": int(_attr(tag, "id")), "x": float(_attr(tag, "x") or 0), "y": float(_attr(tag, "y") or 0),
+                    "w": float(_attr(tag, "width") or 16), "h": float(_attr(tag, "height") or 16),
+                    "props": props, "kind": fg_kind(props)})
+    return out
+
+
+def _num(v):
+    v = float(v)
+    return str(int(v)) if v == int(v) else ("%g" % v)
+
+
+def _set_attr(tag, name, value):
+    if re.search(r'\b%s="[^"]*"' % name, tag):
+        return re.sub(r'\b(%s)="[^"]*"' % name, lambda m: '%s="%s"' % (m.group(1), value), tag, count=1)
+    return tag + ' %s="%s"' % (name, value)
+
+
+def _props_xml(props, ind, nl):
+    lines = [ind + " <properties>"]
+    for k in sorted(props):
+        lines.append('%s  <property name="%s" value="%s"/>' % (ind, k, props[k]))
+    lines.append(ind + " </properties>")
+    return nl.join(lines)
+
+
+def save_fgtiles(path, changed, added, deleted):
+    """changed: [{id, x, y, w, h, props}] (props - полный набор: чего нет - удаляется),
+    added: [{x, y, w, h, props}], deleted: [id]. Правит только эти объекты, остальное байт-в-байт.
+    -> {временный индекс добавленного: новый id}"""
+    with open(path, encoding="utf-8", newline="") as f:
+        text = f.read()
+    nl = "\r\n" if "\r\n" in text else "\n"
+    byid = {int(c["id"]): c for c in changed}
+    dele = set(int(d) for d in deleted)
+
+    def repl(m):
+        tag = m.group(2)
+        if _attr(tag, "type") != "fgtile":
+            return m.group(0)
+        oid = int(_attr(tag, "id"))
+        if oid in dele:
+            return ""
+        c = byid.get(oid)
+        if not c:
+            return m.group(0)
+        ind = m.group(1)
+        for k, v in (("x", c["x"]), ("y", c["y"]), ("width", c["w"]), ("height", c["h"])):
+            tag = _set_attr(tag, k, _num(v))
+        body = m.group(4) or ""
+        old = dict(FG_PROP_RE.findall(body))
+        props = {k: str(v) for k, v in c["props"].items()}
+        if old == props and not m.group(3):
+            return "%s<object%s>%s</object>%s" % (ind, tag, body, m.group(0)[len(m.group(0).rstrip("\r\n")):])
+        tail = m.group(0)[len(m.group(0).rstrip("\r\n")):] or nl
+        if body and "<properties>" in body:
+            # меняем значения на месте, лишние убираем, новые - перед </properties>
+            def prepl(pm):
+                k = pm.group(1)
+                if k not in props:
+                    return "\x00"
+                return pm.group(0).replace('value="%s"' % pm.group(2), 'value="%s"' % props[k], 1)
+            body = FG_PROP_RE.sub(prepl, body)
+            body = re.sub(r'[ \t]*\x00[ \t]*\r?\n?', "", body)
+            add = [k for k in sorted(props) if k not in old]
+            if add:
+                pind = re.search(r'([ \t]*)<property ', body)
+                pind = pind.group(1) if pind else ind + "  "
+                ins = "".join('%s<property name="%s" value="%s"/>%s' % (pind, k, props[k], nl) for k in add)
+                body = re.sub(r'([ \t]*</properties>)', lambda mm: ins + mm.group(1), body, count=1)
+            return "%s<object%s>%s</object>%s" % (ind, tag, body, tail)
+        return "%s<object%s>%s%s%s%s</object>%s" % (ind, tag, nl, _props_xml(props, ind, nl), nl, ind, tail)
+
+    text = FG_OBJ_RE.sub(repl, text)
+    ids = {}
+    if added:
+        mm = re.search(r'<map\b[^>]*\bnextobjectid="(\d+)"', text)
+        nid = int(mm.group(1)) if mm else 1 + max([int(x) for x in re.findall(r'<object id="(\d+)"', text)] or [0])
+        # группа объектов, где уже лежат fgtile / актёры
+        grp = None
+        for g in re.finditer(r'<objectgroup\b[^>]*>(.*?)</objectgroup>', text, re.S):
+            if 'type="fgtile"' in g.group(1) or grp is None:
+                grp = g
+                if 'type="fgtile"' in g.group(1):
+                    break
+        if grp is None:
+            raise ValueError("в карте нет <objectgroup> — некуда добавить fgtile")
+        ind = re.search(r'\n([ \t]*)<object ', grp.group(0))
+        ind = ind.group(1) if ind else "  "
+        blocks = []
+        for k, a in enumerate(added):
+            props = {kk: str(v) for kk, v in a["props"].items()}
+            blocks.append('%s<object id="%d" name="Fgtile" type="fgtile" x="%s" y="%s" width="%s" height="%s">%s%s%s%s</object>%s'
+                          % (ind, nid, _num(a["x"]), _num(a["y"]), _num(a["w"]), _num(a["h"]), nl,
+                             _props_xml(props, ind, nl), nl, ind, nl))
+            ids[k] = nid
+            nid += 1
+        end = grp.end() - len("</objectgroup>")
+        # вставляем перед строкой с </objectgroup>
+        line_start = text.rfind("\n", 0, end) + 1
+        text = text[:line_start] + "".join(blocks) + text[line_start:]
+        text = re.sub(r'(<map\b[^>]*\bnextobjectid=")\d+(")', lambda m2: m2.group(1) + str(nid) + m2.group(2), text, count=1)
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+    return ids
