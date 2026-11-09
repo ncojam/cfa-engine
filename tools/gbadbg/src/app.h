@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,8 @@ struct App {
 	std::map<uint32_t, std::string> marks;
 	std::vector<uint32_t> errorFrames;
 	char markNote[128] = "";
+	std::string pauseReason;                 // почему стоим на паузе (показывается над экраном игры)
+	std::set<std::string> seenErrors;        // виды ошибок, на которых уже останавливались
 
 	// лента: функции, которые начали вызываться (не вызывались последние activityGap кадров)
 	std::deque<Activity> feed;

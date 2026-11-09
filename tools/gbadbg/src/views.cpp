@@ -95,8 +95,10 @@ static Obj readObj(const uint8_t* oam, int i) {
 	return o;
 }
 
-void Views::gameWindow(Emu& emu, float scale) {
+void Views::gameWindow(Emu& emu, float scale, const std::string& status) {
 	ImGui::Begin("Game");
+	if (status.empty()) ImGui::TextColored(ImVec4(0.5f, 1, 0.5f, 1), "running");
+	else ImGui::TextColored(ImVec4(1, 0.45f, 0.35f, 1), "PAUSED - %s", status.c_str());
 	gameTex.upload(emu.pixels(), Emu::W, Emu::H);
 	const ImVec2 p0 = ImGui::GetCursorScreenPos();
 	ImGui::Image(tid(gameTex), ImVec2(Emu::W * scale, Emu::H * scale));

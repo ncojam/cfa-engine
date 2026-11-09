@@ -38,7 +38,7 @@ class Views {
 public:
 	void beforeFrame(Emu& emu);   // вызывать перед каждым выполнением кадра (подсветка изменённых тайлов)
 
-	void gameWindow(Emu& emu, float scale);
+	void gameWindow(Emu& emu, float scale, const std::string& status);
 	void tilesWindow(Emu& emu);
 	void spritesWindow(Emu& emu);
 	void paletteWindow(Emu& emu);

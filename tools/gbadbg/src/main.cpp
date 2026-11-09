@@ -191,7 +191,7 @@ int main(int argc, char** argv) {
 		if (!ImGui::DockBuilderGetNode(dock)) buildLayout(dock);
 		ImGui::DockSpaceOverViewport(dock, ImGui::GetMainViewport());
 
-		app.views.gameWindow(app.emu, 3.0f);
+		app.views.gameWindow(app.emu, 3.0f, app.paused ? app.pauseReason : std::string());
 		timelineWindow(app, keys);
 		logWindow(app);
 		activityWindow(app);

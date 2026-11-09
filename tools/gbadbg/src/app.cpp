@@ -1,6 +1,7 @@
 #include "app.h"
 
 #include <algorithm>
+#include <cctype>
 
 namespace gbadbg {
 
@@ -22,7 +23,21 @@ void App::stepLive(uint32_t keys) {
 	if (emu.errorInFrame) {
 		hist.setFlag(f, FF_ERROR, true);
 		errorFrames.push_back(f);
-		if (pauseOnError) pause();   // pause() сам трассирует кадр - стек в момент ошибки
+		// Останавливаемся только на НОВОМ виде ошибки: если игра пишет одну и ту же ошибку каждый
+		// кадр, иначе эмуляция встаёт навсегда. Вид = текст без шестнадцатеричных чисел (адресов).
+		std::string first, sig;
+		for (auto l = emu.log.rbegin(); l != emu.log.rend() && l->frame == f; ++l)
+			if (l->isError()) first = l->text;
+		for (size_t i = 0; i < first.size();) {
+			size_t j = i;
+			while (j < first.size() && isxdigit((unsigned char)first[j])) j++;
+			if (j - i >= 4) { sig += '#'; i = j; }          // адрес/число -> #
+			else { sig += first[i]; i++; }
+		}
+		if (pauseOnError && seenErrors.insert(sig).second) {
+			pause();   // pause() сам трассирует кадр - стек в момент ошибки
+			pauseReason = "error: " + first + "   (same kind of error won't pause again; Space = continue)";
+		}
 	}
 }
 
@@ -61,6 +76,7 @@ void App::traceView(uint32_t watchAddr, uint32_t watchLen) {
 
 void App::pause() {
 	paused = true;
+	pauseReason = "paused";
 	if (autoTrace && hasSymbols() && trace.frame != view) traceView();
 	if (autoDiff) computeDiff();
 }
@@ -74,6 +90,7 @@ void App::resume() {
 		while (!feed.empty() && feed.front().frame > view) feed.pop_front();
 	}
 	paused = false;
+	pauseReason.clear();
 	diff.frame = -1;
 }
 
