@@ -416,3 +416,4 @@ body:not(.tab-dialogs) #sidebar,body:not(.tab-dialogs) #issuesBadge,body:not(.ta
 .tl-fg-f{display:flex;align-items:center;gap:4px;color:var(--muted)}
 .tl-fg-f input{width:72px;background:var(--bg2);border:1px solid var(--line2);border-radius:4px;padding:2px 5px;font-family:var(--mono)}
 .tl-fg-f select{background:var(--bg2);border:1px solid var(--line2);border-radius:4px;padding:2px 4px}
+.tl-area-mark{color:#7dff9a;font-size:11px}

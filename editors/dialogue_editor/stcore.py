@@ -30,6 +30,8 @@ def paths(project):
         "build": os.path.join(project, "build_graphics.sh"),
         "images": os.path.join(project, "images"),
         "resources": os.path.join(project, "resources"),
+        # области «где игрок» для состояний подмены - только для редактора, движок не читает
+        "areas": os.path.join(project, "resources", "supertile_areas.json"),
     }
 
 
@@ -422,3 +424,32 @@ def save_fgtiles(path, changed, added, deleted):
     with open(path, "w", encoding="utf-8", newline="") as f:
         f.write(text)
     return ids
+
+
+# ------------------------------------------------------------------ области «где игрок» (только для редактора)
+# {"map-downhill.tmx": {"64": [[[cx, cy], ...], ...]}} - номер состояния -> список многоугольников
+# в координатах углов клеток (клетка 8 px), все стороны горизонтальные или вертикальные.
+
+def load_areas(project):
+    p = paths(project)["areas"]
+    if not os.path.isfile(p):
+        return {}
+    with open(p, encoding="utf-8") as f:
+        return json.load(f).get("areas", {})
+
+
+def save_areas(project, areas):
+    p = paths(project)["areas"]
+    clean = {m: {k: v for k, v in st.items() if v} for m, st in areas.items()}
+    clean = {m: st for m, st in clean.items() if st}
+    with open(p, "w", encoding="utf-8", newline="\n") as f:
+        f.write('{\n "about": "Области, где находится игрок в каждом состоянии подмены тайлов (supertiles.cpp). '
+                'Только для редактора cfa-engine, игра не читает. Координаты - углы клеток по 8 px.",\n "areas": {')
+        maps = sorted(clean)
+        for i, m in enumerate(maps):
+            f.write('\n  %s: {' % json.dumps(m))
+            states = sorted(clean[m], key=int)
+            for j, k in enumerate(states):
+                f.write('\n   %s: %s%s' % (json.dumps(k), json.dumps(clean[m][k], separators=(",", ":")), "," if j < len(states) - 1 else ""))
+            f.write('\n  }%s' % ("," if i < len(maps) - 1 else ""))
+        f.write('\n }\n}\n')

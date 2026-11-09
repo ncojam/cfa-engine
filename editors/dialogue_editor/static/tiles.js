@@ -10,13 +10,14 @@ const TL = {
   bmp: null, tmx: null, view: 'sel', zoom: store.get('tl.zoom', 2), perRow: store.get('tl.perRow', 32),
   mapZoom: store.get('tl.mapZoom', 1), mark: store.get('tl.mark', true), filter: '',
   sets: {}, maps: {}, drag: null, busy: false,
+  areas: {}, areasOrig: '{}', areaDraw: null, dim: store.get('tl.dim', true),
   fgs: {}, fgSel: null, fgSeq: 0, fgShow: store.get('tl.fgShow', true), fgAll: store.get('tl.fgAll', false), fgFocus: false,
 };
 
 const tlClone = o => JSON.parse(JSON.stringify(o));
 const tlKey = p => JSON.stringify([p.a.to, p.a.from, p.a.len, p.b.to, p.b.from, p.b.len, p.name_a, p.name_b]);
 const tlDirty = i => i >= TL.orig.length || tlKey(TL.pairs[i]) !== tlKey(TL.orig[i]);
-const tlAnyDirty = () => TL.pairs.some((_, i) => tlDirty(i)) || Object.keys(TL.fgs || {}).some(tlFgDirty);
+const tlAnyDirty = () => TL.pairs.some((_, i) => tlDirty(i)) || Object.keys(TL.fgs || {}).some(tlFgDirty) || tlAreasDirty();
 const tlUse = i => [...new Set([...(TL.state.use[2 * i] || []), ...(TL.state.use[2 * i + 1] || [])])].sort();
 const tlMapOf = where => 'map-' + where.split(' ')[0] + '.tmx';
 
@@ -42,6 +43,7 @@ function tlIngest(st, keepSel) {
   TL.state = st;
   TL.pairs = tlClone(st.pairs);
   TL.orig = tlClone(st.pairs);
+  TL.areas = tlClone(st.areas || {}); TL.areasOrig = JSON.stringify(TL.areas); TL.areaDraw = null;
   if (!keepSel) TL.sel = Math.min(store.get('tl.sel', 0), TL.pairs.length - 1);
   tlPick(TL.sel, true, keepSel && !!TL.tmx);   // после сохранения/перечитывания остаёмся на той же карте
 }
@@ -134,7 +136,7 @@ function tlRenderList() {
       } else list.append(h('div', { class: 'tl-note' }, n));
     }
     list.append(h('div', { class: 'tl-item' + (i === TL.sel ? ' sel' : '') + (tlDirty(i) ? ' dirty' : ''), onclick: () => { const f = tlFgSelObj(); if (f && tlFgPair(f) !== i) TL.fgSel = null; TL.fgFocus = true; tlPick(i); } },
-      h('div', { class: 'tl-item-t' }, h('span', { class: 'tl-idx' }, `${2 * i}|${2 * i + 1}`), ` ${p.name_a || '?'} → ${p.name_b || '?'}`),
+      h('div', { class: 'tl-item-t' }, h('span', { class: 'tl-idx' }, `${2 * i}|${2 * i + 1}`), tlHasArea(i) ? h('span', { class: 'tl-area-mark', title: 'Нарисована область «где игрок»' }, ' ▣') : null, ` ${p.name_a || '?'} → ${p.name_b || '?'}`),
       h('div', { class: 'tl-item-u' }, use.length ? use.map(tlLevelChip) : h('span', { class: 'tl-hint' }, 'нигде не используется'))));
   });
   return h('aside', { class: 'tl-list' },
@@ -238,6 +240,10 @@ function tlRenderMap() {
         h('input', { type: 'checkbox', checked: TL.mark, onchange: e => { TL.mark = e.target.checked; store.set('tl.mark', TL.mark); tlMapPaint(); } }), ' обвести'),
       h('label', { title: 'Показывать fgtile на карте' }, h('input', { type: 'checkbox', checked: TL.fgShow, onchange: e => { TL.fgShow = e.target.checked; store.set('tl.fgShow', TL.fgShow); tlMapPaint(); } }), ' fgtile'),
       h('label', { title: 'Показывать и остальные fgtile (двери без подмены, телепорты, кровать…)' }, h('input', { type: 'checkbox', checked: TL.fgAll, onchange: e => { TL.fgAll = e.target.checked; store.set('tl.fgAll', TL.fgAll); tlMapPaint(); } }), ' все'),
+      h('button', { class: 'btn small' + (TL.areaDraw ? ' primary' : ''), onclick: tlAreaStart, title: 'Нарисовать область, где игрок находится в показанном состоянии (только для редактора, игра не читает)' },
+        TL.areaDraw ? `✏ рисую область ${TL.areaDraw.state}…` : `✏ область ${tlAreaState() ?? ''}`),
+      h('button', { class: 'btn small', onclick: tlAreaClear, title: 'Удалить области показанного состояния на этой карте' }, '🗑 область'),
+      h('label', { title: 'Затемнять карту вне области показанного состояния' }, h('input', { type: 'checkbox', checked: TL.dim, onchange: e => { TL.dim = e.target.checked; store.set('tl.dim', TL.dim); tlMapPaint(); } }), ' затемнять'),
       h('button', { class: 'btn small', onclick: () => tlFgAdd(false), title: 'Новый триггер подмены для выбранной пары - в центр видимой части карты' }, '+ fgtile'),
       h('button', { class: 'btn small', onclick: () => tlFgAdd(true), title: 'Новая пара в конец таблицы и триггер для неё' }, '+ пара с fgtile'),
       h('div', { class: 'spacer' }),
@@ -448,6 +454,7 @@ function tlMapBind() {
   cv.addEventListener('mousedown', e => {
     if (e.button !== 1 && e.button !== 0) return;
     e.preventDefault();   // средняя кнопка: без автопрокрутки браузера
+    if (e.button === 0 && TL.areaDraw) { tlAreaClick(e); return; }
     if (e.button === 0) {
       const r = cv.getBoundingClientRect(), hit = tlFgHit(e.clientX - r.left, e.clientY - r.top);
       if (hit) {
@@ -459,6 +466,7 @@ function tlMapBind() {
     TL.pan = { x: e.clientX, y: e.clientY, ox: TL.mv.ox, oy: TL.mv.oy, moved: false, left: e.button === 0 };
     cv.style.cursor = 'grabbing';
   });
+  cv.addEventListener('dblclick', e => { if (TL.areaDraw) { e.preventDefault(); tlAreaClose(); } });
   cv.addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
 }
 
@@ -476,6 +484,7 @@ addEventListener('mousemove', e => {
     } else { f.x = Math.max(0, Math.round((d.fx + dx) / 8) * 8); f.y = Math.max(0, Math.round((d.fy + dy) / 8) * 8); }
     tlMapPaint(); return;
   }
+  if (TL.areaDraw && TL.mv && cv && e.target === cv) { TL.areaDraw.cur = tlAreaCell(e); tlMapPaint(); }
   if (TL.pan && TL.mv) { if (Math.abs(e.clientX - TL.pan.x) + Math.abs(e.clientY - TL.pan.y) > 3) TL.pan.moved = true; TL.mv.ox = TL.pan.ox + e.clientX - TL.pan.x; TL.mv.oy = TL.pan.oy + e.clientY - TL.pan.y; tlMapPaint(); return; }
   if (!cv || e.target !== cv || !TL.mv) return;
   const r = cv.getBoundingClientRect(), wx = Math.floor((e.clientX - r.left - TL.mv.ox) / TL.mv.s / 8), wy = Math.floor((e.clientY - r.top - TL.mv.oy) / TL.mv.s / 8);
@@ -521,6 +530,7 @@ function tlMapPaint() {
     g.strokeStyle = 'rgba(0,0,0,.85)'; g.lineWidth = 4; tlOutline(g, TL.marked, c, toPx);   // тёмная подложка - видно на любом фоне
     g.strokeStyle = '#ffd400'; g.lineWidth = 2; tlOutline(g, TL.marked, c, toPx);
   }
+  tlAreaPaint(g, mv, cw, ch);
   tlFgDraw(g, mv);
   const z = $('#tlMapZoom'); if (z) z.textContent = `${Math.round(mv.s * 100)}%`;
 }
@@ -547,18 +557,20 @@ async function tlSave(force) {
     edits.push({ idx: i < TL.orig.length ? i : null, a: p.a, b: p.b, name_a: p.name_a, name_b: p.name_b });
   });
   const fg = tlFgPayload();
-  if (!edits.length && !fg.length) return;
+  const areas = tlAreasDirty() ? TL.areas : null;
+  if (!edits.length && !fg.length && !areas) return;
   const bad = TL.pairs.flatMap((p, i) => tlDirty(i) ? ['a', 'b'].flatMap(k => tlIssues(p[k], TL.sets[TL.bmp]).filter(x => x[0] === 'err').map(x => `[${2 * i + (k === 'b')}] ${x[1]}`)) : []);
   if (bad.length && !confirm('Есть ошибки:\n' + bad.slice(0, 6).join('\n') + '\n\nВсё равно сохранить?')) return;
   TL.busy = true;
   try {
-    const st = await api('/api/tiles/save', { hash: TL.state.hash, edits, fg, force: !!force });
+    const st = await api('/api/tiles/save', { hash: TL.state.hash, edits, fg, areas, force: !!force });
     // новые fgtile получили id в tmx - выбранный остаётся выбранным
     const nid = TL.fgSel && typeof TL.fgSel === 'string' && TL.tmx && st.newIds && st.newIds[TL.tmx];
     if (nid) { const F = tlFgCur(); const k = F.list.filter(f => typeof f.id === 'string').findIndex(f => f.id === TL.fgSel); TL.fgSel = k >= 0 ? nid[k] : null; }
     TL.fgs = {};
     tlIngest(st, true);
-    toast(st.changed ? (fg.length ? 'Сохранено: supertiles.cpp и ' + fg.map(x => x.tmx).join(', ') + ' — пересоберите графику (build_graphics.sh)' : 'supertiles.cpp сохранён') : 'Без изменений', 'ok');
+    const what = [edits.length ? 'supertiles.cpp' : null, ...fg.map(x => x.tmx), areas ? 'supertile_areas.json' : null].filter(Boolean);
+    toast(st.changed ? 'Сохранено: ' + what.join(', ') + (fg.length ? ' — пересоберите графику (build_graphics.sh)' : '') : 'Без изменений', 'ok');
   } catch (e) {
     if (e.status === 409 && confirm(e.message + '\n\nПерезаписать файл своими правками?')) { TL.busy = false; return tlSave(true); }
     toast('Не сохранено: ' + e.message, 'err');
@@ -707,6 +719,11 @@ function tlFgRenderBar() {
   const bar = $('#tlFgBar'); if (!bar) return;
   bar.innerHTML = '';
   const f = tlFgSelObj();
+  if (TL.areaDraw) {
+    bar.append(h('b', { style: 'color:#ff6bd6' }, `✏ Область для состояния ${TL.areaDraw.state}:`),
+      h('span', { class: 'tl-hint' }, 'клик — угол (линии только под 90°, по углам клеток) · клик по первой точке, двойной клик или Enter — замкнуть · Backspace — убрать точку · Esc — отмена · средняя кнопка — двигать карту'));
+    return;
+  }
   if (!f) {
     bar.append(h('span', { class: 'tl-hint' }, 'Клик по fgtile — выбрать (и его пару в списке) · тащить — двигать · белый уголок — размер · Del — удалить · стрелки — сдвиг на клетку'));
     return;
@@ -773,3 +790,120 @@ addEventListener('keydown', e => {
   else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); tlFgDelete(); }
   else if (e.key === 'Escape') { TL.fgSel = null; tlFgChanged(); }
 });
+
+// ============================================================ области «где игрок» (только для редактора)
+// Для состояния подмены на карте - один или несколько многоугольников со сторонами под 90°.
+// Координаты - углы клеток (8 px). Вне области карта слегка затемняется. Файл - resources/supertile_areas.json.
+
+const tlAreasDirty = () => TL.areas && JSON.stringify(TL.areas) !== TL.areasOrig;
+function tlAreaState() {   // номер состояния, которое сейчас показано на карте
+  if (TL.view === 'none') return null;
+  const side = TL.view === 'sel' ? TL.side : TL.view;
+  return 2 * TL.sel + (side === 'b' ? 1 : 0);
+}
+const tlAreaPolys = (tmx, st) => (TL.areas && TL.areas[tmx] && TL.areas[tmx][st]) || [];
+const tlHasArea = i => TL.areas && Object.values(TL.areas).some(m => (m[2 * i] || []).length || (m[2 * i + 1] || []).length);
+
+function tlAreaCell(e) {   // ближайший угол клетки под курсором
+  const cv = $('#tlMap'), r = cv.getBoundingClientRect(), mv = TL.mv;
+  return [Math.round((e.clientX - r.left - mv.ox) / mv.s / 8), Math.round((e.clientY - r.top - mv.oy) / mv.s / 8)];
+}
+function tlAreaOrtho(last, c) {   // следующая точка: только по горизонтали или по вертикали от последней
+  return Math.abs(c[0] - last[0]) >= Math.abs(c[1] - last[1]) ? [c[0], last[1]] : [last[0], c[1]];
+}
+function tlAreaSimplify(pts) {   // убрать повторы и точки посреди прямой
+  let p = pts.filter((q, k) => k === 0 || q[0] !== pts[k - 1][0] || q[1] !== pts[k - 1][1]);
+  if (p.length > 1 && p[0][0] === p[p.length - 1][0] && p[0][1] === p[p.length - 1][1]) p.pop();
+  let changed = true;
+  while (changed && p.length > 3) {
+    changed = false;
+    for (let k = 0; k < p.length; k++) {
+      const a = p[(k + p.length - 1) % p.length], b = p[k], c = p[(k + 1) % p.length];
+      if ((a[0] === b[0] && b[0] === c[0]) || (a[1] === b[1] && b[1] === c[1])) { p.splice(k, 1); changed = true; break; }
+    }
+  }
+  return p;
+}
+
+function tlAreaStart() {
+  const st = tlAreaState();
+  if (st == null) { toast('Выберите состояние на карте (a, b или «выбранное»), не «без подмены»'); return; }
+  if (!TL.mv) { toast('Сначала выберите карту'); return; }
+  TL.areaDraw = TL.areaDraw ? null : { state: st, pts: [], cur: null };
+  TL.fgSel = null;
+  tlRender();
+}
+
+function tlAreaClose() {
+  const d = TL.areaDraw; if (!d) return;
+  const pts = d.pts.slice();
+  if (pts.length >= 2) {
+    const first = pts[0], last = pts[pts.length - 1];
+    if (first[0] !== last[0] && first[1] !== last[1]) {
+      // угол, чтобы замкнуть под 90°: после горизонтали идём вертикально и наоборот
+      const prev = pts[pts.length - 2], horiz = prev[1] === last[1];
+      pts.push(horiz ? [last[0], first[1]] : [first[0], last[1]]);
+    }
+  }
+  const poly = tlAreaSimplify(pts);
+  TL.areaDraw = null;
+  if (poly.length < 4) { toast('Область не замкнулась: нужно хотя бы 4 угла', 'err'); tlRender(); return; }
+  const m = (TL.areas[TL.tmx] = TL.areas[TL.tmx] || {});
+  (m[d.state] = m[d.state] || []).push(poly);
+  toast(`Область для состояния ${d.state} добавлена (${poly.length} углов)`);
+  tlRender();
+}
+
+function tlAreaClear() {
+  const st = tlAreaState(); if (st == null || !TL.tmx) return;
+  const n = tlAreaPolys(TL.tmx, st).length;
+  if (!n) { toast('У этого состояния на этой карте области нет'); return; }
+  if (!confirm(`Удалить ${n === 1 ? 'область' : n + ' области'} состояния ${st} на ${TL.tmx}?`)) return;
+  delete TL.areas[TL.tmx][st];
+  tlRender();
+}
+
+function tlAreaPaint(g, mv, cw, ch) {
+  const toPx = ([x, y]) => [mv.ox + x * 8 * mv.s, mv.oy + y * 8 * mv.s];
+  const st = tlAreaState(), polys = st == null || !TL.tmx ? [] : tlAreaPolys(TL.tmx, st);
+  const path = (ps) => { g.beginPath(); for (const poly of ps) poly.forEach((p, k) => { const [x, y] = toPx(p); k ? g.lineTo(x, y) : g.moveTo(x, y); }), g.closePath(); };
+  if (polys.length) {
+    if (TL.dim) {   // всё вне области - темнее
+      g.save(); g.beginPath(); g.rect(0, 0, cw, ch);
+      for (const poly of polys) { poly.forEach((p, k) => { const [x, y] = toPx(p); k ? g.lineTo(x, y) : g.moveTo(x, y); }); g.closePath(); }
+      g.fillStyle = 'rgba(0,0,0,.5)'; g.fill('evenodd'); g.restore();
+    }
+    g.save(); path(polys); g.strokeStyle = 'rgba(0,0,0,.8)'; g.lineWidth = 4; g.stroke();
+    g.strokeStyle = '#7dff9a'; g.lineWidth = 2; g.setLineDash([8, 4]); g.stroke(); g.restore();
+  }
+  const d = TL.areaDraw;
+  if (d && d.pts.length) {
+    g.save(); g.beginPath();
+    d.pts.forEach((p, k) => { const [x, y] = toPx(p); k ? g.lineTo(x, y) : g.moveTo(x, y); });
+    if (d.cur) { const [x, y] = toPx(tlAreaOrtho(d.pts[d.pts.length - 1], d.cur)); g.lineTo(x, y); }
+    g.strokeStyle = '#000'; g.lineWidth = 4; g.stroke(); g.strokeStyle = '#ff6bd6'; g.lineWidth = 2; g.stroke();
+    d.pts.forEach((p, k) => { const [x, y] = toPx(p); g.fillStyle = k ? '#ff6bd6' : '#fff'; g.fillRect(x - 4, y - 4, 8, 8); g.strokeStyle = '#000'; g.lineWidth = 1; g.strokeRect(x - 4, y - 4, 8, 8); });
+    g.restore();
+  } else if (d && d.cur) {
+    const [x, y] = toPx(d.cur); g.fillStyle = '#ff6bd6'; g.fillRect(x - 3, y - 3, 6, 6);
+  }
+}
+
+function tlAreaClick(e) {   // клик левой в режиме рисования
+  const d = TL.areaDraw, c = tlAreaCell(e);
+  if (!d.pts.length) { d.pts.push(c); }
+  else {
+    const p = tlAreaOrtho(d.pts[d.pts.length - 1], c);
+    const f = d.pts[0];
+    if (d.pts.length >= 3 && (p[0] === f[0] && p[1] === f[1] || (c[0] === f[0] && c[1] === f[1]))) { tlAreaClose(); return; }
+    d.pts.push(p);
+  }
+  tlMapPaint();
+}
+
+addEventListener('keydown', e => {
+  if (typeof TABS === 'undefined' || TABS.cur !== 'tiles' || !TL.areaDraw) return;
+  if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); TL.areaDraw = null; tlRender(); }
+  else if (e.key === 'Enter') { e.preventDefault(); tlAreaClose(); }
+  else if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); e.stopImmediatePropagation(); TL.areaDraw.pts.pop(); tlMapPaint(); }
+}, true);

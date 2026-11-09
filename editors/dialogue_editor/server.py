@@ -648,7 +648,7 @@ def api_tiles_state():
                     "odd": bool(s["to"] % 2 or s["from"] % 2)}
         x.pop('line', None); x.pop('label', None)
     usage = stcore.load_usage(CFG['project'])
-    return {"pairs": pairs, "use": usage.get("use", {}), "levels": usage.get("levels", {}), "errors": usage.get("errors", []),
+    return {"pairs": pairs, "areas": stcore.load_areas(CFG['project']), "use": usage.get("use", {}), "levels": usage.get("levels", {}), "errors": usage.get("errors", []),
             "tilesets": stcore.list_tilesets(CFG['project']), "maps": stcore.list_maps(CFG['project']),
             "vramTiles": stcore.VRAM_TILES, "hash": _st_hash(), "table": p}
 
@@ -702,6 +702,12 @@ def api_tiles_save(body):
         os.makedirs(os.path.join(HERE, 'backups'), exist_ok=True)
         shutil.copy2(tp, os.path.join(HERE, 'backups', '%s_%s' % (stamp, os.path.basename(tp))))
         new_ids[f['tmx']] = stcore.save_fgtiles(tp, f.get('changed') or [], f.get('added') or [], f.get('deleted') or [])
+    if body.get('areas') is not None:
+        ap = stcore.paths(CFG['project'])['areas']
+        if os.path.isfile(ap):
+            os.makedirs(os.path.join(HERE, 'backups'), exist_ok=True)
+            shutil.copy2(ap, os.path.join(HERE, 'backups', '%s_%s' % (stamp, os.path.basename(ap))))
+        stcore.save_areas(CFG['project'], body['areas'])
     p = _st_table()
     with open(p, encoding='utf-8') as f:
         old = f.read()
@@ -713,7 +719,7 @@ def api_tiles_save(body):
             f.write(new)
     if new != old or fg:
         stcore.refresh_usage(CFG['project'])
-    return 200, dict(api_tiles_state(), ok=True, changed=(new != old) or bool(fg), newIds=new_ids)
+    return 200, dict(api_tiles_state(), ok=True, changed=(new != old) or bool(fg) or body.get('areas') is not None, newIds=new_ids)
 
 
 # ------------------------------------------------------------------ вкладка «Группы»
