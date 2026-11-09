@@ -29,6 +29,7 @@ public:
 	bool lineAt(uint32_t addr, int& file, int& line) const;
 	std::string where(uint32_t addr) const;      // "player_interaction.cpp:123"
 	std::string dataName(uint32_t addr) const;   // "relationLVLS+0x10" или ""
+	uint32_t findData(const std::string& name) const;   // адрес переменной по имени (или части), 0 - нет
 
 	const std::string& fileName(int f) const { return files[f]; }
 	int fileCount() const { return (int)files.size(); }

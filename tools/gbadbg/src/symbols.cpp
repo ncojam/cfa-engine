@@ -111,7 +111,7 @@ bool Symbols::load(const std::string& elf, const std::string& srcRoot, const std
 		const uint32_t addr = (uint32_t)strtoul(addrTok, nullptr, 16);
 		if (strncmp(addrTok, "0x", 2) != 0 && strcmp(addrTok, "0") != 0) return;
 		const int line = lineTok[0] == '-' ? 0 : atoi(lineTok);   // '-' - конец последовательности
-		rows.push_back({ addr & ~1u, cur, line });
+		if (addr >= 0x02000000) rows.push_back({ addr & ~1u, cur, line });   // адрес 0 - выброшенный линкером код
 	});
 	// одинаковый адрес - берём последнюю строку (как addr2line)
 	std::stable_sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.addr < b.addr; });
@@ -161,6 +161,13 @@ std::string Symbols::where(uint32_t addr) const {
 	int f, l;
 	if (!lineAt(addr, f, l)) return "";
 	return fs::path(files[f]).filename().string() + ":" + std::to_string(l);
+}
+
+uint32_t Symbols::findData(const std::string& name) const {
+	for (const Data& d : datas) if (d.name == name) return d.addr;
+	for (const Data& d : datas) if (d.name.find(name) != std::string::npos) return d.addr;
+	for (const Func& f : funcs) if (f.name.find(name) != std::string::npos) return f.addr;
+	return 0;
 }
 
 std::string Symbols::dataName(uint32_t addr) const {

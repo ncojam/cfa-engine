@@ -387,6 +387,20 @@ void sourceWindow(App& a) {
 		ImGui::End();
 		return;
 	}
+	// выделение строк: клик - строка, Shift+клик - диапазон; Copy / Ctrl+C - в буфер обмена
+	static int selA = -1, selB = -1, selFile = -1;
+	if (selFile != a.srcFile) { selA = selB = -1; selFile = a.srcFile; }
+	const int lo = std::min(selA, selB), hi = std::max(selA, selB);
+	bool doCopy = ImGui::SmallButton("Copy");
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("copy selected lines (click / Shift+click), or 5 lines around the highlighted one");
+	if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, false)) doCopy = true;
+	if (doCopy) {
+		int a0 = lo, a1 = hi;
+		if (a0 < 0) { a0 = std::max(0, a.srcLine - 1 - 5); a1 = std::min((int)src->size() - 1, a.srcLine - 1 + 5); }
+		std::string t = fmt("%s:%d-%d\n", a.syms.fileName(a.srcFile).c_str(), a0 + 1, a1 + 1);
+		for (int i = a0; i <= a1 && i < (int)src->size(); i++) t += fmt("%5d  ", i + 1) + (*src)[i] + "\n";
+		ImGui::SetClipboardText(t.c_str());
+	}
 	ImGui::BeginChild("code", ImVec2(0, 0), 0, ImGuiWindowFlags_HorizontalScrollbar);
 	const float lh = ImGui::GetTextLineHeightWithSpacing();
 	if (a.srcScroll) {
@@ -402,9 +416,12 @@ void sourceWindow(App& a) {
 				ImGui::GetWindowDrawList()->AddRectFilled(p, ImVec2(p.x + ImGui::GetContentRegionAvail().x + 2000, p.y + lh),
 					IM_COL32(90, 70, 20, 255));
 			}
-			ImGui::TextDisabled("%5d", i + 1);
-			ImGui::SameLine();
-			ImGui::TextUnformatted((*src)[i].c_str());
+			char lbl[1100];
+			snprintf(lbl, sizeof(lbl), "%5d  %s##L%d", i + 1, (*src)[i].c_str(), i);
+			if (ImGui::Selectable(lbl, lo >= 0 && i >= lo && i <= hi)) {
+				if (ImGui::GetIO().KeyShift && selA >= 0) selB = i;
+				else selA = selB = i;
+			}
 		}
 	ImGui::EndChild();
 	ImGui::End();

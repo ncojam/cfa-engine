@@ -64,6 +64,9 @@ struct App {
 	void toggleMark();
 	void showAddr(uint32_t addr);   // исходник по адресу кода
 	void showFunc(int fn);
+	// Найти кадр, в котором [addr,+len] последний раз поменялись (идём назад от показанного), перейти
+	// туда и показать, кто записал. Возвращает текст результата.
+	std::string findWriter(uint32_t addr, uint32_t len);
 
 private:
 	void runShown(uint32_t f, bool record, uint32_t keys, uint32_t watchAddr = 0, uint32_t watchLen = 0);

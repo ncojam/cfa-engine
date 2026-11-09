@@ -144,6 +144,7 @@ int main(int argc, char** argv) {
 	else if (!app.syms.load(elf, srcRoot, binutils, err)) printf("gbadbg: symbols: %s\n", err.c_str());
 	else if (!err.empty()) printf("gbadbg: %s\n", err.c_str());
 	app.views.syms = &app.syms;
+	app.views.findWriter = [](uint32_t addr, uint32_t len) { return app.findWriter(addr, len); };
 	app.views.whoWrote = [](uint32_t addr, uint32_t len) {
 		if (!app.paused) app.pause();
 		app.traceView(addr, len);

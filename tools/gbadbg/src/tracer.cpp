@@ -120,7 +120,8 @@ void Tracer::runFrame(Emu& emu, uint32_t keys, bool audio, Trace& out, uint32_t 
 	while (gba->video.frameCounter == frameCounter && mTimingCurrentTime(&gba->timing) - startCycle < VIDEO_TOTAL_LENGTH + VIDEO_HORIZONTAL_LENGTH) {
 		while (cpu->cycles < cpu->nextEvent) {
 			const uint32_t len = cpu->cpsr.t ? 2 : 4;
-			const uint32_t pc = (uint32_t)cpu->gprs[ARM_PC] - 2 * len;
+			// до шага gprs[PC] = инструкция + длина (prefetch[0]); во время её выполнения будет +2*длина
+			const uint32_t pc = (uint32_t)cpu->gprs[ARM_PC] - len;
 			if (pc != expect) branch(pc, expect, (uint32_t)cpu->gprs[ARM_LR], (uint32_t)cpu->gprs[ARM_SP], cpu->cpsr.priv);
 			lastPc = pc;
 			const int32_t c0 = cpu->cycles;

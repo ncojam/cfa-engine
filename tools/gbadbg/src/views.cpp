@@ -418,6 +418,16 @@ void Views::diffWindow(Emu& emu, FrameDiff& diff) {
 
 // ============================ hex ============================
 
+// "02001234", "0x2001234" или имя переменной (целиком или часть)
+uint32_t Views::parseAddr(const char* s) const {
+	const char* p = s;
+	if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) p += 2;
+	bool hex = *p != 0;
+	for (const char* q = p; *q; q++) if (!isxdigit((unsigned char)*q)) hex = false;
+	if (hex) return (uint32_t)strtoul(p, nullptr, 16);
+	return syms ? syms->findData(s) : 0;
+}
+
 void Views::memoryWindow(Emu& emu, const FrameDiff& diff) {
 	ImGui::Begin("Memory");
 	const char* names[8];
@@ -427,23 +437,61 @@ void Views::memoryWindow(Emu& emu, const FrameDiff& diff) {
 	ImGui::SameLine();
 	static char addrBuf[16] = "";
 	ImGui::SetNextItemWidth(110);
-	if (ImGui::InputText("goto (hex)", addrBuf, sizeof(addrBuf), ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CharsHexadecimal)) {
-		const uint32_t a = (uint32_t)strtoul(addrBuf, nullptr, 16);
+	if (ImGui::InputText("goto", addrBuf, sizeof(addrBuf), ImGuiInputTextFlags_EnterReturnsTrue)) {
+		const uint32_t a = parseAddr(addrBuf);
 		for (int i = 0; i < kRegionCount; i++)
 			if ((a >> 24) == (uint32_t)kRegions[i].id) memRegion = i;
 		gotoAddress(a);
 	}
 	ImGui::SameLine();
-	static char watchBuf[16] = "";
+	static char watchBuf[64] = "";
 	static int watchLen = 4;
-	ImGui::SetNextItemWidth(90);
-	ImGui::InputText("##w", watchBuf, sizeof(watchBuf), ImGuiInputTextFlags_CharsHexadecimal);
+	ImGui::SetNextItemWidth(120);
+	ImGui::InputTextWithHint("##w", "addr or name", watchBuf, sizeof(watchBuf));
 	ImGui::SameLine(); ImGui::SetNextItemWidth(60);
 	ImGui::InputInt("bytes", &watchLen, 0);
 	watchLen = std::clamp(watchLen, 1, 256);
 	ImGui::SameLine();
-	if (ImGui::Button("Who wrote?") && whoWrote && watchBuf[0]) whoWrote((uint32_t)strtoul(watchBuf, nullptr, 16), (uint32_t)watchLen);
-	if (ImGui::IsItemHovered()) ImGui::SetTooltip("trace the shown frame and report every write to [addr, +bytes] with call stack (Trace > Events).\nRight-click a byte to put its address here.");
+	if (ImGui::Button("Who wrote?") && whoWrote && watchBuf[0]) whoWrote(parseAddr(watchBuf), (uint32_t)watchLen);
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("trace the SHOWN frame and report every write to [addr, +bytes] with call stack (Trace > Events).\nRight-click a byte to put its address here.");
+	ImGui::SameLine();
+	if (ImGui::Button("Find last write") && findWriter && watchBuf[0]) searchStatus = findWriter(parseAddr(watchBuf), (uint32_t)watchLen);
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("go BACK through history to the frame where these bytes last changed,\nthen show who wrote them there (for memory that got corrupted earlier)");
+	if (!searchStatus.empty()) ImGui::TextColored(ImVec4(0.6f, 0.9f, 1, 1), "%s", searchStatus.c_str());
+
+	// поиск байт / текста в EWRAM и IWRAM: "69 6F 67 31" или "text" в кавычках
+	static char findBuf[64] = "";
+	static std::vector<uint32_t> found;
+	ImGui::SetNextItemWidth(200);
+	const bool doFind = ImGui::InputTextWithHint("##find", "find: 69 6F 67 31 or \"text\"", findBuf, sizeof(findBuf), ImGuiInputTextFlags_EnterReturnsTrue);
+	ImGui::SameLine();
+	if ((ImGui::Button("Find in RAM") || doFind) && findBuf[0]) {
+		std::vector<uint8_t> pat;
+		if (findBuf[0] == '"') { for (const char* c = findBuf + 1; *c && *c != '"'; c++) pat.push_back((uint8_t)*c); }
+		else { for (char* c = findBuf; *c;) { char* e; const unsigned long v = strtoul(c, &e, 16); if (e == c) { c++; continue; } pat.push_back((uint8_t)v); c = e; } }
+		found.clear();
+		for (Region r : { R_EWRAM, R_IWRAM }) {
+			size_t sz = 0;
+			const uint8_t* m = emu.mem(r, &sz);
+			if (!m || pat.empty()) continue;
+			for (size_t i = 0; i + pat.size() <= sz && found.size() < 200; i++)
+				if (!memcmp(m + i, pat.data(), pat.size())) found.push_back(((uint32_t)r << 24) + (uint32_t)i);
+		}
+		searchStatus = std::to_string(found.size()) + " matches";
+	}
+	if (!found.empty()) {
+		ImGui::BeginChild("found", ImVec2(0, std::min(found.size(), (size_t)6) * ImGui::GetTextLineHeightWithSpacing() + 6), ImGuiChildFlags_Borders);
+		for (uint32_t ad : found) {
+			char l[200];
+			snprintf(l, sizeof(l), "%08X  %s", ad, syms ? syms->dataName(ad).c_str() : "");
+			if (ImGui::Selectable(l)) {
+				for (int i = 0; i < kRegionCount; i++) if ((ad >> 24) == (uint32_t)kRegions[i].id) memRegion = i;
+				gotoAddress(ad);
+				snprintf(watchBuf, sizeof(watchBuf), "%08X", ad);
+			}
+		}
+		ImGui::EndChild();
+	}
 	const RegionInfo& ri = kRegions[memRegion];
 	size_t size = 0;
 	const uint8_t* m = emu.mem(ri.id, &size);

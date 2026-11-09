@@ -47,12 +47,15 @@ public:
 
 	Symbols* syms = nullptr;                                   // имена переменных для адресов
 	std::function<void(uint32_t addr, uint32_t len)> whoWrote;  // «кто записал» - трассировка показанного кадра
+	std::function<std::string(uint32_t addr, uint32_t len)> findWriter;   // искать назад по истории
+	std::string searchStatus;
 
 	// перейти в hex-просмотре к адресу (из окна изменений)
 	void gotoAddress(uint32_t addr) { memGoto = addr; memGotoPending = true; }
 
 private:
 	uint32_t bgr555(const uint8_t* pal, int index) const;
+	uint32_t parseAddr(const char* s) const;
 
 	Tex gameTex, tilesTex, spriteAtlas;
 	std::vector<uint8_t> prevVram;

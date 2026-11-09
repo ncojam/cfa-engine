@@ -2,6 +2,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
+
+#include <mgba/core/core.h>
+#include <mgba/internal/gba/serialize.h>
 
 namespace gbadbg {
 
@@ -151,6 +155,48 @@ void App::updateFeed(uint32_t f) {
 	}
 	while (feed.size() > 1000) feed.pop_back();
 	if (newest >= 0 && srcFollow) showFunc(newest);
+}
+
+// Память внутри сохранённого состояния (без загрузки в ядро - быстро)
+static const uint8_t* stateMem(const std::vector<uint8_t>& st, uint32_t addr, uint32_t len) {
+	const GBASerializedState* s = (const GBASerializedState*)st.data();
+	const uint8_t* base;
+	uint32_t size;
+	switch (addr >> 24) {
+	case 2: base = s->wram; size = sizeof(s->wram); break;
+	case 3: base = s->iwram; size = sizeof(s->iwram); break;
+	case 5: base = (const uint8_t*)s->pram; size = sizeof(s->pram); break;
+	case 6: base = (const uint8_t*)s->vram; size = sizeof(s->vram); break;
+	case 7: base = (const uint8_t*)s->oam; size = sizeof(s->oam); break;
+	default: return nullptr;
+	}
+	const uint32_t off = (addr & 0xFFFFFF) % size;
+	return off + len <= size ? base + off : nullptr;
+}
+
+std::string App::findWriter(uint32_t addr, uint32_t len) {
+	if (view < 0 || hist.empty()) return "no history";
+	if (!paused) pause();
+	// значения после показанного кадра (ядро сейчас в этом состоянии)
+	cur.resize(emu.stateSize());
+	emu.saveState(cur.data());
+	const uint8_t* now = stateMem(cur, addr, len);
+	if (!now) return "address is not in EWRAM/IWRAM/VRAM/OAM/Palette";
+	const std::vector<uint8_t> want(now, now + len);
+	const int64_t from = view;
+	for (int64_t f = view; f >= (int64_t)hist.first(); f--) {
+		if (!hist.reconstruct((uint32_t)f, tmp)) break;
+		const uint8_t* p = stateMem(tmp, addr, len);
+		if (p && memcmp(p, want.data(), len) != 0) {
+			// до кадра f было иначе, после - уже как сейчас: писал кадр f
+			seek(f);
+			traceView(addr, len);
+			char b[160];
+			snprintf(b, sizeof(b), "last change: frame %lld (%lld frames back) - see Trace > Events", (long long)f, (long long)(from - f));
+			return b;
+		}
+	}
+	return "unchanged during the whole recorded history";
 }
 
 void App::showAddr(uint32_t addr) {
