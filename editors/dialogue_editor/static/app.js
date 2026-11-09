@@ -850,6 +850,31 @@ function previewEl(D, p) {
   redraw();
   return h('div', {class:'gba-wrap'}, cv, cap);
 }
+/** Превью «системной» реплики (реакция NPC в колесе: группы, общие фразы, Ask about).
+ *  getName/getText вызываются при каждой перерисовке; вернёт { el, redraw } или null, если превью выключено в ⚙.
+ *  onMeasure(layout) — чтобы подсветить поле, когда текст не влезает. */
+function reactPreview(getName, getText, { onMeasure, scale } = {}) {
+  const sc = scale || Math.min(+S.settings.preview || 0, 2);
+  if (!sc) return null;
+  const cv = h('canvas', { class: 'gba-cv react', title: 'Как реплика выглядит в игре (бабл реакции в колесе взаимодействий)' });
+  const cap = h('div', { class: 'gba-cap' });
+  const redraw = () => {
+    const m = GBA.draw(cv, GBA.reactionScene(getName(), getText()), sc, redraw)[0];
+    if (m && GBA.hasFont()) {
+      cap.className = 'gba-cap' + (m.overflow ? ' over' : '');
+      cap.textContent = m.overflow ? `✕ не влезает: ${m.lines} строк из ${m.maxLines}` : `строк ${m.lines}/${m.maxLines}`;
+    }
+    if (onMeasure) onMeasure(m);
+  };
+  redraw();
+  return { el: h('div', { class: 'gba-wrap react' }, cv, cap), redraw };
+}
+/** Проверка без рисования: влезает ли реплика реакции (null — шрифт не загружен). */
+function reactOverflow(name, text) {
+  if (!GBA.hasFont()) return null;
+  const b = GBA.reactionScene(name, text).bubbles[0];
+  return GBA.layout(b.strs, (b.w - 2) * 8, (b.h - 2) * 8).overflow;
+}
 function redrawPreview(p) {
   const fn = PREVIEWS.get(p.uid); if (fn) fn();
   // a choice right after this line shows its portrait

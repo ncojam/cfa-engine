@@ -505,3 +505,10 @@ body:not(.tab-dialogs) #sidebar,body:not(.tab-dialogs) #issuesBadge,body:not(.ta
 .pe-place-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:6px;margin:6px 0}
 .pe-place{display:flex;align-items:center;gap:6px}
 .pe-place .gr-in{flex:1}
+
+/* превью бабла реакции (группы, Ask about) */
+.gba-wrap.react{margin-top:4px}
+.gba-wrap.react .gba-cv{cursor:default}
+.gr-ph textarea.over{border-color:var(--err)}
+.pe-say .pe-none{display:none}
+.pe-say[data-empty="1"] .pe-none{display:inline}

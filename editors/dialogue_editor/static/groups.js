@@ -203,6 +203,9 @@ function grRenderPhrases() {
   // у шуток свои «темы» (виды шуток) и подписи исходов; у разговоров - темы listSubjects
   const levels = GR.st.levels, subjects = Array.isArray(sit.subjects) ? sit.subjects : GR.st.subjects, defs = (GR.st.defaults[sit.key] || {});
   const lvlTxt = l => (sit.levelLabels && sit.levelLabels[l]) || GR_LVL_TXT[l] || l;
+  // кто говорит в превью: первый участник группы (имя влияет только на первую строку бабла)
+  const firstMember = GR.m.members.findIndex(x => x === G.indexOf(g));
+  const speaker = () => firstMember >= 0 ? grName(firstMember) : (g.title || g.name || 'NPC');
   const mine = (s, l) => GR.m.phrases.filter(p => p.group === g.key && p.situation === sit.key && p.subject === s && p.level === l);
   const filled = subjects.reduce((n, nm, s) => n + (nm ? levels.filter(l => mine(s, l).length).length : 0), 0);
   const cells = subjects.filter(Boolean).length * levels.length;
@@ -217,13 +220,25 @@ function grRenderPhrases() {
         cnt.textContent = `${p.text.length}/${GR.st.textMax}` + (/[^\x20-\x7e]/.test(p.text) ? ' · не-ASCII!' : '');
         cnt.classList.toggle('bad', bad);
       };
-      const ta = h('textarea', { rows: 2, placeholder: 'Фраза группы (английский, ASCII)', oninput: e => { p.text = e.target.value; upd(); grTouch(); } }, p.text);
+      let pv = null;
+      const ta = h('textarea', { rows: 2, placeholder: 'Фраза группы (английский, ASCII)', oninput: e => { p.text = e.target.value; upd(); if (pv) pv.redraw(); grTouch(); } }, p.text);
       upd();
-      box.append(h('div', { class: 'gr-ph' }, ta, h('div', { class: 'gr-ph-f' }, cnt,
+      pv = reactPreview(speaker, () => p.text, { onMeasure: m => ta.classList.toggle('over', !!(m && m.overflow)) });
+      box.append(h('div', { class: 'gr-ph' }, ta, pv ? pv.el : null, h('div', { class: 'gr-ph-f' }, cnt,
         h('button', { class: 'icon-btn', title: 'Удалить фразу', onclick: () => { GR.m.phrases.splice(GR.m.phrases.indexOf(p), 1); grRender(); } }, '×'))));
     }
     box.append(h('button', { class: 'btn small ghost', onclick: () => { GR.m.phrases.push({ group: g.key, situation: sit.key, subject: s, level: l, text: '' }); grRender(); setTimeout(() => { const t = $$('.gr-cell textarea'); const el = [...t].find(x => !x.value); if (el) el.focus(); }); } }, '+ фраза'));
-    if (def.length) box.append(h('details', { class: 'gr-def' }, h('summary', null, `общие (${def.length})`), def.map(t => h('div', null, t))));
+    if (def.length) {
+      // превью общих — только когда раскрыли (их много)
+      const det = h('details', { class: 'gr-def' }, h('summary', null, `общие (${def.length})` + (def.some(t => reactOverflow(speaker(), t)) ? ' ✕ не влезает' : '')),
+        def.map(t => h('div', { 'data-t': t }, t)));
+      det.addEventListener('toggle', () => {
+        if (!det.open || det.dataset.pv) return;
+        det.dataset.pv = 1;
+        $$('div[data-t]', det).forEach(d => { const pv = reactPreview(speaker, () => d.dataset.t); if (pv) d.append(pv.el); });
+      });
+      box.append(det);
+    }
     return box;
   };
   return h('div', null,

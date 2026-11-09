@@ -104,6 +104,15 @@ const GBA = (() => {
     return sc;
   }
 
+  /** Реакция NPC в колесе взаимодействий (player_interaction.cpp: executeInteractionEffect / showReaction):
+   *  BubbleGum(0, startScreen) + drowBubble(5, 13, 20, 6), имя + ":   …" + реплика, без портрета. */
+  function reactionScene(name, text) {
+    const sc = { bubbles: [], portrait: null, crop: [96, 160], cropX: [32, 208] };
+    sc.bubbles.push({ x:5, y:13, w:20, h:6, border:true, bg:C.bubbleBg, fg:C.bubbleFg,
+      strs:[name || '', ':                              ', text || ''], main:true });
+    return sc;
+  }
+
   /** Overflow info for the main bubble of a phrase (null if it has no bubble). */
   function measure(p) {
     if (!FONT) return null;
@@ -162,6 +171,8 @@ const GBA = (() => {
   /** Draw a scene into canvas. scale = CSS pixel size per GBA pixel. */
   function draw(canvas, sc, scale = 2, redraw) {
     const [y0, y1] = sc.crop;
+    const [x0, x1] = sc.cropX || [0, W];
+    const ww = x1 - x0;
     const hh = y1 - y0;
     // overflowing text is drawn below the bubble: make room for it
     let extra = 0;
@@ -171,13 +182,13 @@ const GBA = (() => {
       if (L.overflow) extra = Math.max(extra, (b.y + (b.border ? 1 : 0)) * 8 + L.lines * 8 - y1 + 2);
     }
     const realH = hh + Math.max(0, extra);
-    canvas.width = W; canvas.height = realH;
-    canvas.style.width = (W * scale) + 'px'; canvas.style.height = (realH * scale) + 'px';
+    canvas.width = ww; canvas.height = realH;
+    canvas.style.width = (ww * scale) + 'px'; canvas.style.height = (realH * scale) + 'px';
     const ctx = canvas.getContext('2d');
     ctx.imageSmoothingEnabled = false;
-    ctx.fillStyle = C.screen; ctx.fillRect(0, 0, W, realH);
-    if (extra > 0) { ctx.fillStyle = '#120808'; ctx.fillRect(0, hh, W, realH - hh); }
-    ctx.save(); ctx.translate(0, -y0);
+    ctx.fillStyle = C.screen; ctx.fillRect(0, 0, ww, realH);
+    if (extra > 0) { ctx.fillStyle = '#120808'; ctx.fillRect(0, hh, ww, realH - hh); }
+    ctx.save(); ctx.translate(-x0, -y0);
     if (sc.portrait && sc.portrait.url) {
       const e = portraitImg(sc.portrait.url, redraw);
       if (e.ok) ctx.drawImage(e.img, 168, 72);
@@ -197,5 +208,5 @@ const GBA = (() => {
     return out;
   }
 
-  return { W, H, setFont, hasFont, setColors, colors, DEFAULT_COLORS, layout, sceneFor, measure, draw };
+  return { W, H, setFont, hasFont, setColors, colors, DEFAULT_COLORS, layout, sceneFor, reactionScene, measure, draw };
 })();

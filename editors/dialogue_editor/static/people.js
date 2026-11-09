@@ -58,6 +58,29 @@ const peShown = c => { const q = PE.filter.trim().toLowerCase(); return !q || pe
 const peWho = c => h('th', null, h('span', { class: 'tl-idx' }, c), ' ', peName(c), h('div', { class: 'tl-hint' }, peGroup(c) || '—'));
 const pePreview = (topic, tier, what) => (PE.m.templates[topic][tier] || '').replace('%s', what);
 
+// Ячейка «скажет»: бабл реакции как в игре (если превью включено в ⚙), иначе просто текст.
+// getText вызывается при перерисовке; вернёт td, у которого .redraw() — перерисовать после правки.
+function peSayCell(c, getText) {
+  const td = h('td', { class: 'pe-say' });
+  const pv = reactPreview(() => peName(c), () => getText() || '');
+  const fill = () => {
+    if (pv) { pv.el.hidden = !getText(); pv.redraw(); td.dataset.empty = getText() ? '' : '1'; }
+    else td.textContent = getText() || '—';
+  };
+  if (pv) td.append(pv.el, h('span', { class: 'pe-none' }, '—'));
+  fill();
+  td.redraw = fill;
+  return td;
+}
+const peLongest = arr => arr.filter(Boolean).reduce((a, b) => (b.length > a.length ? b : a), '');
+// самое длинное, что может встать в «%s» темы: худший случай для бабла
+function peWorstItem(topic) {
+  if (topic === 0) return peLongest(PE.st.topics || []);
+  if (topic === 1) return peLongest(PE.m.chars.map(ch => ch.music));
+  if (topic === 2) return peLongest(PE.m.places);
+  return peLongest(PE.m.chars.flatMap(ch => ch[topic === 3 ? 'meals' : 'dreams'] || []));
+}
+
 // ---- шаблоны и пороги
 function peRenderTemplates() {
   const lim = PE.st.textMax - PE.st.itemMax + 2;
@@ -67,7 +90,14 @@ function peRenderTemplates() {
       h('tr', null, h('th', null, 'тема'), h('th', null, 'неохотно с / с удовольствием с'), PE.st.tiers.map(t => h('th', null, t))),
       PE.st.askTopics.map((t, k) => h('tr', null, h('th', null, t),
         h('td', null, ['reluctant', 'happy'].map(f => h('input', { class: 'gr-in num', type: 'number', value: PE.m.rules[k][f], oninput: e => { PE.m.rules[k][f] = parseInt(e.target.value, 10) || 0; peTouch(); } }))),
-        [0, 1, 2].map(tier => h('td', null, peInput(() => PE.m.templates[k][tier], v => { PE.m.templates[k][tier] = v; }, { max: tier ? lim : PE.st.textMax, wide: true, allowPct: true, placeholder: tier ? 'с «%s»' : 'без «%s»' })))))));
+        [0, 1, 2].map(tier => {
+          // превью: самое длинное имя персонажа и самое длинное «%s» этой темы — худший случай
+          const worstName = peLongest(PE.st.names);
+          const pv = reactPreview(() => worstName, () => (PE.m.templates[k][tier] || '').replace('%s', peWorstItem(k)));
+          return h('td', null, peInput(() => PE.m.templates[k][tier], v => { PE.m.templates[k][tier] = v; if (pv) pv.redraw(); }, { max: tier ? lim : PE.st.textMax, wide: true, allowPct: true, placeholder: tier ? 'с «%s»' : 'без «%s»' }),
+            pv ? pv.el : null);
+        })))),
+    h('div', { class: 'tl-hint', style: 'margin-top:6px' }, 'Превью — худший случай: самое длинное имя и самое длинное, что встанет в «%s».'));
 }
 
 // ---- хобби: только показываем - берутся из тем разговора
@@ -78,7 +108,7 @@ function peRenderHobbies() {
     let fav = []; for (const want of [4, 3]) { if (!fav.length) fav = PE.st.topics.map((t, k) => (likes[k] === want && t) ? t : null).filter(Boolean); }
     return h('tr', null, peWho(c),
       h('td', null, PE.st.topics.map((t, k) => t && likes[k] !== undefined ? h('span', { class: 'pe-like', 'data-v': likes[k] }, PE_LIKE[likes[k]] + ' ' + t) : null)),
-      h('td', { class: 'pe-say' }, fav.length ? pePreview(0, 2, fav[0]) + (fav.length > 1 ? `  (или: ${fav.slice(1).join(', ')})` : '') : '— «Hmm... nothing comes to mind, really.»'));
+      peSayCell(c, () => fav.length ? pePreview(0, 2, fav[0]) : 'Hmm... nothing comes to mind, really.'));
   });
   return h('div', null, h('div', { class: 'gr-tools' }, peSearch(), h('span', { class: 'tl-hint' }, 'Хобби не хранятся: персонаж называет тему разговора, которую обожает (❤), а если таких нет — которая нравится (🙂). Меняется в редакторе диалогов (отношение к темам).')),
     h('table', { class: 'gr-phr' }, h('tr', null, h('th', null, 'персонаж'), h('th', null, 'темы разговора'), h('th', null, 'скажет «с удовольствием»')), rows));
@@ -86,9 +116,13 @@ function peRenderHobbies() {
 
 // ---- музыка
 function peRenderMusic() {
-  const rows = PE.st.names.map((n, c) => !peShown(c) ? null : h('tr', null, peWho(c),
-    h('td', null, peInput(() => PE.m.chars[c].music, v => { PE.m.chars[c].music = v; }, { max: PE.st.itemMax, wide: true, placeholder: 'например: punk rock' })),
-    h('td', { class: 'pe-say' }, PE.m.chars[c].music ? pePreview(1, 2, PE.m.chars[c].music) : '—')));
+  const rows = PE.st.names.map((n, c) => {
+    if (!peShown(c)) return null;
+    const say = peSayCell(c, () => PE.m.chars[c].music ? pePreview(1, 2, PE.m.chars[c].music) : '');
+    return h('tr', null, peWho(c),
+      h('td', null, peInput(() => PE.m.chars[c].music, v => { PE.m.chars[c].music = v; say.redraw(); }, { max: PE.st.itemMax, wide: true, placeholder: 'например: punk rock' })),
+      say);
+  });
   return h('div', null, h('div', { class: 'gr-tools' }, peSearch(), h('span', { class: 'tl-hint' }, `Строчными, до ${PE.st.itemMax} символов, ASCII.`)),
     h('table', { class: 'gr-phr' }, h('tr', null, h('th', null, 'персонаж'), h('th', null, 'любимая музыка'), h('th', null, 'скажет «с удовольствием»')), rows));
 }
@@ -108,7 +142,7 @@ function peRenderPlaces() {
     h('option', { value: -1 }, slot ? '+' : '—'), P.map((p, k) => h('option', { value: k, selected: PE.m.chars[c].places[slot] === k }, p)));
   const rows = PE.st.names.map((n, c) => !peShown(c) ? null : h('tr', null, peWho(c),
     h('td', null, sel(c, 0), PE.m.chars[c].places.length ? sel(c, 1) : null),
-    h('td', { class: 'pe-say' }, PE.m.chars[c].places.length ? pePreview(2, 2, P[PE.m.chars[c].places[0]] || '?') : '—')));
+    peSayCell(c, () => PE.m.chars[c].places.length ? pePreview(2, 2, P[PE.m.chars[c].places[0]] || '?') : '')));
   return h('div', null, list, h('div', { class: 'gr-tools' }, peSearch()),
     h('table', { class: 'gr-phr' }, h('tr', null, h('th', null, 'персонаж'), h('th', null, 'любимые места (до двух)'), h('th', null, 'скажет «с удовольствием»')), rows));
 }
@@ -119,11 +153,13 @@ function peRenderList(key, title) {
   const rows = PE.st.names.map((n, c) => {
     if (!peShown(c)) return null;
     const L = PE.m.chars[c][key];
+    // игра берёт случайный вариант - показываем самый длинный (худший для бабла)
+    const say = peSayCell(c, () => { const v = peLongest(L); return v ? pePreview(topic, 2, v) : ''; });
     return h('tr', null, peWho(c),
-      h('td', null, L.map((v, k) => h('div', { class: 'pe-item' }, peInput(() => L[k], x => { L[k] = x; }, { max: PE.st.itemMax, wide: true }),
+      h('td', null, L.map((v, k) => h('div', { class: 'pe-item' }, peInput(() => L[k], x => { L[k] = x; say.redraw(); }, { max: PE.st.itemMax, wide: true }),
         h('button', { class: 'icon-btn', title: 'Удалить', onclick: () => { L.splice(k, 1); peRender(); } }, '×'))),
         L.length < PE.st.maxItems ? h('button', { class: 'btn small ghost', onclick: () => { L.push(''); peRender(); } }, '+ вариант') : null),
-      h('td', { class: 'pe-say' }, L.filter(Boolean).length ? pePreview(topic, 2, L.find(Boolean)) : '—'));
+      say);
   });
   return h('div', null, h('div', { class: 'gr-tools' }, peSearch(), h('span', { class: 'tl-hint' }, `${title}: до ${PE.st.maxItems} вариантов, игра выбирает случайный. До ${PE.st.itemMax} символов, ASCII.` + (key === 'dreams' ? ' Мечты пишутся так, чтобы встали после «I want …»: «to start a band».' : ''))),
     h('table', { class: 'gr-phr' }, h('tr', null, h('th', null, 'персонаж'), h('th', null, title), h('th', null, 'скажет «с удовольствием»')), rows));
