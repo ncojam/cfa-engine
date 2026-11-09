@@ -17,6 +17,9 @@ cmake --build build -j(nproc)
 
 ## Запуск
 
+Проще всего — скрипт в корне cfa-engine: `./gbadbg.sh` (соберёт отладчик, пересоберёт `project/` и запустит
+`project/graveblood.gba`; `--no-build` — без пересборки игры). Вручную:
+
 ```fish
 ./build/gbadbg ~/graveblood/graveblood.gba
 # опции: --elf out/graveblood.elf --src-root ~/graveblood --binutils <префикс>
