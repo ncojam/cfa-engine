@@ -2,7 +2,7 @@
 // Ask about: ответы персонажей по темам и ярусам (не хочет / неохотно / с удовольствием) + пороги тем.
 // Романтика: пол, ориентация, партнёр, влюблённости, флаги.
 
-const PE = { st: null, m: null, orig: '', sub: store.get('pe.sub', 'ask'), who: store.get('pe.who', -1), filter: '', busy: false };
+const PE = { st: null, m: null, orig: '', sub: store.get('pe.sub', 'tpl'), who: store.get('pe.who', -1), filter: '', busy: false };
 const PE_LIKE = { 0: '😠', 1: '🙁', 2: '😐', 3: '🙂', 4: '❤' };
 const peDirty = () => PE.m && JSON.stringify(PE.m) !== PE.orig;
 const peName = c => (PE.st.names[c] || '?');
@@ -30,80 +30,103 @@ function peRender() {
   const root = $('#people'); root.innerHTML = '';
   if (!PE.m) return;
   const sub = (k, label) => h('button', { class: 'tab' + (PE.sub === k ? ' on' : ''), onclick: () => { PE.sub = k; store.set('pe.sub', k); peRender(); } }, label);
+  const body = { tpl: peRenderTemplates, hobby: peRenderHobbies, music: peRenderMusic, place: peRenderPlaces, meal: () => peRenderList('meals', 'Любимая еда'),
+    dream: () => peRenderList('dreams', 'Мечты'), love: peRenderLove }[PE.sub] || peRenderTemplates;
   root.append(h('div', { class: 'gr' },
     h('div', { class: 'gr-bar' },
-      sub('ask', '❓ Ask about'), sub('love', '💘 Романтика'),
+      h('span', { class: 'tl-hint' }, 'Ask about:'),
+      sub('tpl', '🧩 Шаблоны и пороги'), sub('hobby', '🎯 Хобби'), sub('music', '🎵 Музыка'), sub('place', '📍 Места'),
+      sub('meal', '🍩 Еда'), sub('dream', '✨ Мечты'),
+      h('span', { class: 'pe-sep' }), sub('love', '💘 Романтика'),
       h('div', { class: 'spacer' }),
-      h('span', { class: 'tl-hint' }, 'src/personality.h, personality.cpp'),
       h('button', { class: 'btn', onclick: peReload }, '⟳ С диска'),
       h('button', { class: 'btn primary' + (peDirty() ? ' dirty' : ''), disabled: !peDirty() || PE.busy, onclick: () => peSave(), title: 'Записать personality.h / .cpp (Ctrl+S)' }, 'Сохранить')),
-    PE.sub === 'love' ? h('div', { class: 'gr-body' }, peRenderLove()) : peRenderAsk()));
+    h('div', { class: 'gr-body' }, body())));
 }
 
 function peTouch() { const b = $('#people .gr-bar .btn.primary'); if (b) { b.disabled = !peDirty(); b.classList.toggle('dirty', peDirty()); } }
 
-// ------------------------------------------------------------ Ask about
-function peRenderAsk() {
-  const q = PE.filter.trim().toLowerCase();
-  const filled = c => PE.m.lines.filter(l => l.char === c && l.text.trim()).length;
-  const item = (c, label, sub) => h('div', { class: 'tl-item' + (PE.who === c ? ' sel' : ''), onclick: () => { PE.who = c; store.set('pe.who', c); peRender(); } },
-    h('div', { class: 'tl-item-t' }, label), h('div', { class: 'tl-item-u' }, sub));
-  const list = h('div', { class: 'tl-items' },
-    item(-1, '★ Общие ответы', 'если у персонажа своего ответа нет'),
-    PE.st.names.map((n, c) => (!q || n.toLowerCase().includes(q) || peGroup(c).toLowerCase().includes(q))
-      ? item(c, h('span', null, h('span', { class: 'tl-idx' }, c), ' ', n), `${peGroup(c) || '—'} · своих ответов: ${filled(c)}`) : null));
-  return h('div', { class: 'tl', style: 'flex:1;min-height:0' },
-    h('aside', { class: 'tl-list' },
-      h('div', { class: 'side-tools' }, h('input', { type: 'search', placeholder: 'Персонаж или группа…', value: PE.filter,
-        oninput: e => { PE.filter = e.target.value; const s = e.target.selectionStart; peRender(); const n = $('#people .tl-list input'); n.focus(); n.setSelectionRange(s, s); } })),
-      list),
-    h('section', { class: 'tl-main' }, peAskRules(), PE.who < 0 ? peAskFallback() : peAskChar(PE.who)));
+const peBadText = (v, max) => v.length > max || /[^\x20-\x7e]/.test(v) || v.includes('%');
+function peInput(get, set, { max, placeholder = '', wide = false, allowPct = false } = {}) {
+  const el = h('input', { class: 'gr-in' + (wide ? ' wide' : ''), value: get(), placeholder, maxlength: max,
+    oninput: e => { set(e.target.value); el.classList.toggle('bad', allowPct ? (e.target.value.length > max || /[^\x20-\x7e]/.test(e.target.value)) : peBadText(e.target.value, max)); peTouch(); } });
+  return el;
 }
+const peSearch = () => h('input', { type: 'search', class: 'gr-search', placeholder: 'Персонаж или группа…', value: PE.filter,
+  oninput: e => { PE.filter = e.target.value; const st = e.target.selectionStart; peRender(); const n = $('#people .gr-search'); n.focus(); n.setSelectionRange(st, st); } });
+const peShown = c => { const q = PE.filter.trim().toLowerCase(); return !q || peName(c).toLowerCase().includes(q) || peGroup(c).toLowerCase().includes(q); };
+const peWho = c => h('th', null, h('span', { class: 'tl-idx' }, c), ' ', peName(c), h('div', { class: 'tl-hint' }, peGroup(c) || '—'));
+const pePreview = (topic, tier, what) => (PE.m.templates[topic][tier] || '').replace('%s', what);
 
-function peAskRules() {
-  return h('details', { class: 'tl-block pe-rules' }, h('summary', null, h('b', null, 'Пороги тем'), h('span', { class: 'tl-hint' }, ' — общие для всех: «отношение» = relationLVLS (5 звёзд = 100) + бонус группы ±15')),
-    h('table', { class: 'gr-mx' }, h('tr', null, h('th'), h('th', null, 'неохотно — с'), h('th', null, 'с удовольствием — с')),
+// ---- шаблоны и пороги
+function peRenderTemplates() {
+  const lim = PE.st.textMax - PE.st.itemMax + 2;
+  return h('div', null,
+    h('div', { class: 'tl-hint', style: 'margin-bottom:8px' }, `Ответ = шаблон яруса, «%s» заменяется на любимое персонажа (хобби — любимая тема разговора). Ярус — по «отношению»: relationLVLS (5 звёзд = 100) + бонус группы ±15; если группа к Вике враждебна — на ярус ниже. Шаблон с «%s» — до ${lim} символов, ASCII.`),
+    h('table', { class: 'gr-phr' },
+      h('tr', null, h('th', null, 'тема'), h('th', null, 'неохотно с / с удовольствием с'), PE.st.tiers.map(t => h('th', null, t))),
       PE.st.askTopics.map((t, k) => h('tr', null, h('th', null, t),
-        ['reluctant', 'happy'].map(f => h('td', null, h('input', { class: 'gr-in num', type: 'number', value: PE.m.rules[k][f], oninput: e => { PE.m.rules[k][f] = parseInt(e.target.value, 10) || 0; peTouch(); } })))))));
+        h('td', null, ['reluctant', 'happy'].map(f => h('input', { class: 'gr-in num', type: 'number', value: PE.m.rules[k][f], oninput: e => { PE.m.rules[k][f] = parseInt(e.target.value, 10) || 0; peTouch(); } }))),
+        [0, 1, 2].map(tier => h('td', null, peInput(() => PE.m.templates[k][tier], v => { PE.m.templates[k][tier] = v; }, { max: tier ? lim : PE.st.textMax, wide: true, allowPct: true, placeholder: tier ? 'с «%s»' : 'без «%s»' })))))));
 }
 
-function peTextCell(get, set, placeholder) {
-  const cnt = h('span', { class: 'gr-cnt' });
-  const upd = v => { const bad = v.length > PE.st.textMax || /[^\x20-\x7e]/.test(v); cnt.textContent = `${v.length}/${PE.st.textMax}` + (/[^\x20-\x7e]/.test(v) ? ' · не-ASCII!' : ''); cnt.classList.toggle('bad', bad); };
-  const ta = h('textarea', { rows: 2, placeholder, oninput: e => { set(e.target.value); upd(e.target.value); peTouch(); } }, get());
-  upd(get());
-  return [ta, cnt];
+// ---- хобби: только показываем - берутся из тем разговора
+function peRenderHobbies() {
+  const rows = PE.st.names.map((n, c) => {
+    if (!peShown(c)) return null;
+    const likes = PE.st.likes[c] || [];
+    let fav = []; for (const want of [4, 3]) { if (!fav.length) fav = PE.st.topics.map((t, k) => (likes[k] === want && t) ? t : null).filter(Boolean); }
+    return h('tr', null, peWho(c),
+      h('td', null, PE.st.topics.map((t, k) => t && likes[k] !== undefined ? h('span', { class: 'pe-like', 'data-v': likes[k] }, PE_LIKE[likes[k]] + ' ' + t) : null)),
+      h('td', { class: 'pe-say' }, fav.length ? pePreview(0, 2, fav[0]) + (fav.length > 1 ? `  (или: ${fav.slice(1).join(', ')})` : '') : '— «Hmm... nothing comes to mind, really.»'));
+  });
+  return h('div', null, h('div', { class: 'gr-tools' }, peSearch(), h('span', { class: 'tl-hint' }, 'Хобби не хранятся: персонаж называет тему разговора, которую обожает (❤), а если таких нет — которая нравится (🙂). Меняется в редакторе диалогов (отношение к темам).')),
+    h('table', { class: 'gr-phr' }, h('tr', null, h('th', null, 'персонаж'), h('th', null, 'темы разговора'), h('th', null, 'скажет «с удовольствием»')), rows));
 }
 
-function peAskFallback() {
-  return h('div', { class: 'tl-block' }, h('div', { class: 'tl-tools' }, h('b', null, 'Общие ответы'), h('span', { class: 'tl-hint' }, 'Их говорит любой персонаж, у которого нет своего ответа на эту тему и ярус.')),
-    h('table', { class: 'gr-phr' }, h('tr', null, h('th', null, 'тема'), PE.st.tiers.map(t => h('th', null, t))),
-      PE.st.askTopics.map((t, k) => h('tr', null, h('th', null, t), [0, 1, 2].map(tier => {
-        const [ta, cnt] = peTextCell(() => PE.m.fallback[k][tier], v => { PE.m.fallback[k][tier] = v; }, 'общий ответ');
-        return h('td', { class: 'gr-cell' }, h('div', { class: 'gr-ph' }, ta, h('div', { class: 'gr-ph-f' }, cnt)));
-      })))));
+// ---- музыка
+function peRenderMusic() {
+  const rows = PE.st.names.map((n, c) => !peShown(c) ? null : h('tr', null, peWho(c),
+    h('td', null, peInput(() => PE.m.chars[c].music, v => { PE.m.chars[c].music = v; }, { max: PE.st.itemMax, wide: true, placeholder: 'например: punk rock' })),
+    h('td', { class: 'pe-say' }, PE.m.chars[c].music ? pePreview(1, 2, PE.m.chars[c].music) : '—')));
+  return h('div', null, h('div', { class: 'gr-tools' }, peSearch(), h('span', { class: 'tl-hint' }, `Строчными, до ${PE.st.itemMax} символов, ASCII.`)),
+    h('table', { class: 'gr-phr' }, h('tr', null, h('th', null, 'персонаж'), h('th', null, 'любимая музыка'), h('th', null, 'скажет «с удовольствием»')), rows));
 }
 
-function peAskChar(c) {
-  const likes = PE.st.likes[c] || [];
-  const mine = (k, tier) => PE.m.lines.filter(l => l.char === c && l.topic === k && l.tier === tier);
-  const cell = (k, tier) => {
-    const box = h('td', { class: 'gr-cell' });
-    for (const l of mine(k, tier)) {
-      const [ta, cnt] = peTextCell(() => l.text, v => { l.text = v; }, 'ответ (английский, ASCII)');
-      box.append(h('div', { class: 'gr-ph' }, ta, h('div', { class: 'gr-ph-f' }, cnt,
-        h('button', { class: 'icon-btn', title: 'Удалить', onclick: () => { PE.m.lines.splice(PE.m.lines.indexOf(l), 1); peRender(); } }, '×'))));
-    }
-    box.append(h('button', { class: 'btn small ghost', onclick: () => { PE.m.lines.push({ char: c, topic: k, tier, text: '' }); peRender(); setTimeout(() => { const el = [...$$('#people .gr-cell textarea')].find(x => !x.value); if (el) el.focus(); }); } }, '+ ответ'));
-    if (!mine(k, tier).length) box.append(h('div', { class: 'pe-fb' }, 'общий: ' + (PE.m.fallback[k][tier] || '—')));
-    return box;
-  };
-  return h('div', { class: 'tl-block' },
-    h('div', { class: 'pe-head' }, h('b', { class: 'pe-name' }, peName(c)), h('span', { class: 'tl-lv' }, peGroup(c) || 'без группы'),
-      h('span', { class: 'tl-hint' }, 'темы разговора: '),
-      PE.st.topics.map((t, k) => t && likes[k] !== undefined ? h('span', { class: 'pe-like', 'data-v': likes[k], title: ['ненавидит', 'не любит', 'всё равно', 'нравится', 'обожает'][likes[k]] }, PE_LIKE[likes[k]] + ' ' + t) : null)),
-    h('table', { class: 'gr-phr' }, h('tr', null, h('th', null, 'тема'), PE.st.tiers.map(t => h('th', null, t))),
-      PE.st.askTopics.map((t, k) => h('tr', null, h('th', null, t, h('div', { class: 'tl-hint' }, `с ${PE.m.rules[k].reluctant} / ${PE.m.rules[k].happy}`)), [0, 1, 2].map(tier => cell(k, tier))))));
+// ---- места: общий список + до двух любимых у персонажа
+function peRenderPlaces() {
+  const P = PE.m.places;
+  const list = h('div', { class: 'tl-block pe-places' }, h('b', null, 'Места в игре'), h('span', { class: 'tl-hint' }, ' — так их называют персонажи (с артиклем, если нужен)'),
+    h('div', { class: 'pe-place-list' }, P.map((p, k) => h('div', { class: 'pe-place' }, h('span', { class: 'tl-idx' }, k),
+      peInput(() => P[k], v => { P[k] = v; }, { max: PE.st.itemMax }),
+      h('button', { class: 'icon-btn', title: 'Удалить место', onclick: () => {
+        const used = PE.m.chars.filter(ch => ch.places.includes(k)).length;
+        if (used && !confirm(`Место «${p}» любят ${used} перс. Удалить?`)) return;
+        P.splice(k, 1); PE.m.chars.forEach(ch => { ch.places = ch.places.filter(x => x !== k).map(x => x > k ? x - 1 : x); }); peRender(); } }, '×')))),
+    h('button', { class: 'btn small', onclick: () => { P.push('new place'); peRender(); } }, '+ место'));
+  const sel = (c, slot) => h('select', { onchange: e => { const v = +e.target.value, pl = PE.m.chars[c].places; if (v < 0) pl.splice(slot, 1); else pl[slot] = v; PE.m.chars[c].places = pl.filter(x => x >= 0); peRender(); } },
+    h('option', { value: -1 }, slot ? '+' : '—'), P.map((p, k) => h('option', { value: k, selected: PE.m.chars[c].places[slot] === k }, p)));
+  const rows = PE.st.names.map((n, c) => !peShown(c) ? null : h('tr', null, peWho(c),
+    h('td', null, sel(c, 0), PE.m.chars[c].places.length ? sel(c, 1) : null),
+    h('td', { class: 'pe-say' }, PE.m.chars[c].places.length ? pePreview(2, 2, P[PE.m.chars[c].places[0]] || '?') : '—')));
+  return h('div', null, list, h('div', { class: 'gr-tools' }, peSearch()),
+    h('table', { class: 'gr-phr' }, h('tr', null, h('th', null, 'персонаж'), h('th', null, 'любимые места (до двух)'), h('th', null, 'скажет «с удовольствием»')), rows));
+}
+
+// ---- еда / мечты: по нескольку вариантов
+function peRenderList(key, title) {
+  const topic = key === 'meals' ? 3 : 4;
+  const rows = PE.st.names.map((n, c) => {
+    if (!peShown(c)) return null;
+    const L = PE.m.chars[c][key];
+    return h('tr', null, peWho(c),
+      h('td', null, L.map((v, k) => h('div', { class: 'pe-item' }, peInput(() => L[k], x => { L[k] = x; }, { max: PE.st.itemMax, wide: true }),
+        h('button', { class: 'icon-btn', title: 'Удалить', onclick: () => { L.splice(k, 1); peRender(); } }, '×'))),
+        L.length < PE.st.maxItems ? h('button', { class: 'btn small ghost', onclick: () => { L.push(''); peRender(); } }, '+ вариант') : null),
+      h('td', { class: 'pe-say' }, L.filter(Boolean).length ? pePreview(topic, 2, L.find(Boolean)) : '—'));
+  });
+  return h('div', null, h('div', { class: 'gr-tools' }, peSearch(), h('span', { class: 'tl-hint' }, `${title}: до ${PE.st.maxItems} вариантов, игра выбирает случайный. До ${PE.st.itemMax} символов, ASCII.` + (key === 'dreams' ? ' Мечты пишутся так, чтобы встали после «I want …»: «to start a band».' : ''))),
+    h('table', { class: 'gr-phr' }, h('tr', null, h('th', null, 'персонаж'), h('th', null, title), h('th', null, 'скажет «с удовольствием»')), rows));
 }
 
 // ------------------------------------------------------------ Романтика
@@ -151,9 +174,9 @@ async function peReload() {
 async function peSave(force) {
   if (!peDirty()) return;
   const m = JSON.parse(JSON.stringify(PE.m));
-  m.lines = m.lines.filter(l => l.text.trim());
-  const bad = [...m.lines.map(l => l.text), ...m.fallback.flat()].filter(t => t.length > PE.st.textMax || /[^\x20-\x7e]/.test(t));
-  if (bad.length) { toast(`Ответов с ошибками: ${bad.length} (длина > ${PE.st.textMax} или не-ASCII) — исправьте`, 'err'); return; }
+  m.chars.forEach(c => { c.meals = c.meals.filter(x => x.trim()); c.dreams = c.dreams.filter(x => x.trim()); });
+  const bad = m.chars.flatMap(c => [c.music, ...c.meals, ...c.dreams]).concat(m.places).filter(t => peBadText(t, PE.st.itemMax));
+  if (bad.length) { toast(`Строк с ошибками: ${bad.length} (длина > ${PE.st.itemMax}, не-ASCII или «%») — исправьте`, 'err'); return; }
   PE.busy = true;
   try {
     const st = await api('/api/people/save', { hash: PE.st.hash, model: m, force: !!force });

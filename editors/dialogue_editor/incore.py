@@ -22,6 +22,10 @@ HANDLERS = {
     (2, 14): {"label": "Попросить номер", "code": "player_interaction.cpp: attrib == 14"},
     (2, 40): {"label": "Шутка: подколоть", "code": "player_interaction.cpp: Jokes::isJoke(attrib) -> Jokes::tell (jokes.cpp)"},
     (2, 41): {"label": "Шутка: о себе", "code": "player_interaction.cpp: Jokes::isJoke(attrib) -> Jokes::tell (jokes.cpp)"},
+    (2, 60): {"label": "Флирт: поцелуй в щёку", "code": "player_interaction.cpp: Romance::isRomance(attrib) -> Romance::act (romance.cpp), поза - kissTimer"},
+    (2, 61): {"label": "Флирт: поцелуй в губы", "code": "player_interaction.cpp: Romance::act (romance.cpp): влюблённость, партнёр, ревность, новости"},
+    (2, 62): {"label": "Флирт: грязная шутка", "code": "player_interaction.cpp: Romance::act (romance.cpp)"},
+    (2, 63): {"label": "Флирт: разрыв (мягкий)", "code": "player_interaction.cpp: Romance::act (romance.cpp) - BREAKUP"},
     (2, 43): {"label": "Шутка: смешной танец", "code": "player_interaction.cpp: Jokes::DANCE -> сначала танец (PlayerInteraction::danceTimer), потом Jokes::tell"},
 }
 

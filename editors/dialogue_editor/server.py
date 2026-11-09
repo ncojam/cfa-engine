@@ -871,7 +871,8 @@ def api_people_state():
     return {"model": model, "names": names, "likes": likes, "groups": groups,
             "topics": grcore.parse_subjects(dlg)[:9], "askTopics": pecore.ASK_TOPICS, "tiers": pecore.TIERS,
             "genders": pecore.GENDERS, "orient": pecore.ORIENT, "flags": [list(f) for f in pecore.FLAGS],
-            "textMax": pecore.TEXT_MAX, "hash": _gr_hash_of(_pe_paths()), "files": list(_pe_paths())}
+            "textMax": pecore.TEXT_MAX, "itemMax": pecore.ITEM_MAX, "maxItems": pecore.MAX_ITEMS,
+            "hash": _gr_hash_of(_pe_paths()), "files": list(_pe_paths())}
 
 
 def _gr_hash_of(paths):
