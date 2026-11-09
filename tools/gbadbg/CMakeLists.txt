@@ -46,8 +46,12 @@ target_link_libraries(imgui PUBLIC SDL2::SDL2 OpenGL::GL ${CMAKE_DL_LIBS})
 
 add_executable(gbadbg
 	src/main.cpp
+	src/app.cpp
+	src/ui.cpp
 	src/emu.cpp
 	src/history.cpp
-	src/views.cpp)
+	src/views.cpp
+	src/symbols.cpp
+	src/tracer.cpp)
 target_compile_definitions(gbadbg PRIVATE BUILD_STATIC)
 target_link_libraries(gbadbg PRIVATE mgba imgui SDL2::SDL2 OpenGL::GL)

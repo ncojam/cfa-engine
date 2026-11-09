@@ -1,6 +1,7 @@
 // Обёртка над ядром mGBA: загрузка ROM, кадр, состояние, память, звук, лог.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -41,6 +42,11 @@ public:
 
 	// Один кадр. audio=false - звук выбрасываем (перемотка/повтор кадра)
 	void runFrame(uint32_t keys, bool audio);
+	// Кадр по частям (трассировщик сам крутит ядро между ними): кнопки -> ... -> картинка и звук
+	void beginFrame(uint32_t keys);
+	void endFrame(bool audio);
+	// Ошибки ядра во время кадра - сюда (трассировщик снимает стек вызовов), даже при повторе кадра
+	std::function<void(int level, const char* text)> errorHook;
 
 	size_t stateSize() const { return stateBytes; }
 	void saveState(void* buf);

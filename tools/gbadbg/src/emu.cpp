@@ -31,7 +31,16 @@ bool LogLine::isError() const {
 static Emu* g_emu = nullptr;
 
 static void logCallback(struct mLogger*, int category, enum mLogLevel level, const char* format, va_list args) {
-	if (!g_emu || g_emu->replaying) return;
+	if (!g_emu) return;
+	if (g_emu->errorHook && (level & (mLOG_FATAL | mLOG_ERROR | mLOG_GAME_ERROR))) {
+		char t[512];
+		va_list c;
+		va_copy(c, args);
+		vsnprintf(t, sizeof(t), format, c);
+		va_end(c);
+		g_emu->errorHook(level, t);
+	}
+	if (g_emu->replaying) return;
 	const char* cat = mLogCategoryName(category);
 	const bool gameDebug = cat && !strcmp(cat, "GBA Debug");   // вывод самой игры (регистры 0x04FFF600)
 	// DEBUG/STUB ядра - шум (SWI и т.п.), их не храним
@@ -121,9 +130,17 @@ void Emu::shutdown() {
 
 // ---------------- кадр ----------------
 void Emu::runFrame(uint32_t keys, bool audio) {
+	beginFrame(keys);
+	core->runFrame(core);
+	endFrame(audio);
+}
+
+void Emu::beginFrame(uint32_t keys) {
 	errorInFrame = false;
 	core->setKeys(core, keys);
-	core->runFrame(core);
+}
+
+void Emu::endFrame(bool audio) {
 	for (int y = 0; y < H; y++) {
 		const uint32_t* s = &video[y * 256];
 		uint32_t* d = &rgba[y * W];

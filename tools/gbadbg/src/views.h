@@ -1,6 +1,7 @@
 // Панели просмотра: экран игры, тайлы VRAM, спрайты (OAM), палитры, изменения памяти, hex.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -9,6 +10,8 @@
 struct ImVec2;
 
 namespace gbadbg {
+
+class Symbols;
 
 // Текстура OpenGL под картинку RGBA
 struct Tex {
@@ -41,6 +44,9 @@ public:
 	void paletteWindow(Emu& emu);
 	void diffWindow(Emu& emu, FrameDiff& diff);
 	void memoryWindow(Emu& emu, const FrameDiff& diff);
+
+	Symbols* syms = nullptr;                                   // имена переменных для адресов
+	std::function<void(uint32_t addr, uint32_t len)> whoWrote;  // «кто записал» - трассировка показанного кадра
 
 	// перейти в hex-просмотре к адресу (из окна изменений)
 	void gotoAddress(uint32_t addr) { memGoto = addr; memGotoPending = true; }

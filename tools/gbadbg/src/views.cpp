@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "imgui.h"
+#include "symbols.h"
 
 namespace gbadbg {
 
@@ -373,14 +374,20 @@ void Views::diffWindow(Emu& emu, FrameDiff& diff) {
 	ImGui::Separator();
 	if (diffSel >= 0 && diffSel < (int)diff.regions.size()) {
 		const RegionDiff& r = diff.regions[diffSel];
+		if (diffRangeSel >= 0 && diffRangeSel < (int)r.ranges.size() && whoWrote) {
+			const auto& rg = r.ranges[diffRangeSel];
+			if (ImGui::Button("Who wrote this range? (trace frame, see Trace > Events)"))
+				whoWrote(r.info.base + rg.first, std::min<uint32_t>(rg.second, 256));
+		}
 		ImGui::BeginChild("ranges", ImVec2(0, 0));
 		ImGuiListClipper clip;
 		clip.Begin((int)r.ranges.size());
 		while (clip.Step())
 			for (int k = clip.DisplayStart; k < clip.DisplayEnd; k++) {
 				const auto& rg = r.ranges[k];
-				char l[64];
-				snprintf(l, sizeof(l), "%08X  +%u", r.info.base + rg.first, rg.second);
+				char l[256];
+				const std::string nm = syms ? syms->dataName(r.info.base + rg.first) : std::string();
+				snprintf(l, sizeof(l), "%08X  +%-6u %s", r.info.base + rg.first, rg.second, nm.c_str());
 				if (ImGui::Selectable(l, diffRangeSel == k)) {
 					diffRangeSel = k;
 					for (int m = 0; m < kRegionCount; m++)
@@ -424,6 +431,17 @@ void Views::memoryWindow(Emu& emu, const FrameDiff& diff) {
 			if ((a >> 24) == (uint32_t)kRegions[i].id) memRegion = i;
 		gotoAddress(a);
 	}
+	ImGui::SameLine();
+	static char watchBuf[16] = "";
+	static int watchLen = 4;
+	ImGui::SetNextItemWidth(90);
+	ImGui::InputText("##w", watchBuf, sizeof(watchBuf), ImGuiInputTextFlags_CharsHexadecimal);
+	ImGui::SameLine(); ImGui::SetNextItemWidth(60);
+	ImGui::InputInt("bytes", &watchLen, 0);
+	watchLen = std::clamp(watchLen, 1, 256);
+	ImGui::SameLine();
+	if (ImGui::Button("Who wrote?") && whoWrote && watchBuf[0]) whoWrote((uint32_t)strtoul(watchBuf, nullptr, 16), (uint32_t)watchLen);
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("trace the shown frame and report every write to [addr, +bytes] with call stack (Trace > Events).\nRight-click a byte to put its address here.");
 	const RegionInfo& ri = kRegions[memRegion];
 	size_t size = 0;
 	const uint8_t* m = emu.mem(ri.id, &size);
@@ -453,7 +471,13 @@ void Views::memoryWindow(Emu& emu, const FrameDiff& diff) {
 				const bool ch = rd && off + k < rd->before.size() && rd->before[off + k] != rd->after[off + k];
 				if (ch) ImGui::TextColored(ImColor(hl), "%02X", v);
 				else ImGui::Text("%02X", v);
-				if (ch && ImGui::IsItemHovered()) ImGui::SetTooltip("%08X: %02X -> %02X", ri.base + off + k, rd->before[off + k], rd->after[off + k]);
+				if (ImGui::IsItemHovered()) {
+					const uint32_t ad = ri.base + off + k;
+					const std::string nm = syms ? syms->dataName(ad) : std::string();
+					if (ch) ImGui::SetTooltip("%08X %s\n%02X -> %02X this frame", ad, nm.c_str(), rd->before[off + k], rd->after[off + k]);
+					else ImGui::SetTooltip("%08X %s", ad, nm.c_str());
+					if (ImGui::IsMouseClicked(1)) snprintf(watchBuf, sizeof(watchBuf), "%08X", ad);   // ПКМ - в поле «Who wrote»
+				}
 			}
 			ImGui::SameLine(0, 12);
 			char asc[17];
