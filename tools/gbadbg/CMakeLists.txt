@@ -14,6 +14,10 @@ endif()
 
 include(FetchContent)
 
+# CMake 4 убрал совместимость с cmake_minimum_required < 3.5, а у mGBA 0.10.5 стоит старая версия.
+# Переменная действует и на подпроекты из FetchContent.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
+
 # ---- mGBA: только библиотека (LIBMGBA_ONLY), без фронтендов и внешних зависимостей ----
 set(LIBMGBA_ONLY ON CACHE BOOL "" FORCE)
 set(M_CORE_GBA ON CACHE BOOL "" FORCE)
