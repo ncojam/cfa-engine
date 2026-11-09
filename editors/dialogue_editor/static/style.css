@@ -306,7 +306,7 @@ body:not(.tab-dialogs) #sidebar,body:not(.tab-dialogs) #issuesBadge,body:not(.ta
 .tl-idx{font-family:var(--mono);font-size:12px;color:var(--accent2)}
 .tl-idx.big{font-size:15px;font-weight:700}
 .tl-hint{font-size:11px;color:var(--dim)}
-.tl-main{flex:1;overflow:auto;padding:12px 14px 40px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.tl-main{flex:1;overflow:auto;padding:12px 14px 16px;display:flex;flex-direction:column;gap:10px;min-width:0}
 .tl-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .tl-head select,.tl-tools select{background:var(--panel);border:1px solid var(--line2);border-radius:var(--r);padding:3px 6px}
 .tl-title{display:flex;flex-direction:column}
@@ -333,10 +333,7 @@ body:not(.tab-dialogs) #sidebar,body:not(.tab-dialogs) #issuesBadge,body:not(.ta
 .lg.other::before{border:1px dashed rgba(120,200,255,.8)}
 .lg.out::before{background:#000;border:1px solid #e0a43a}
 .tl-hover{margin-left:auto;font-family:var(--mono);color:var(--text)}
-.tl-canvas-wrap{overflow:auto;max-height:60vh}
 .tl-canvas-wrap canvas{display:block;cursor:crosshair}
-.tl-map-wrap{overflow:auto;max-height:70vh;background:#000}
-.tl-map-wrap canvas{display:block;image-rendering:pixelated}
 
 /* ---------------- группы */
 #groups{height:100%}
@@ -398,3 +395,20 @@ body:not(.tab-dialogs) #sidebar,body:not(.tab-dialogs) #issuesBadge,body:not(.ta
 .gr-def{font-size:11px;color:var(--dim);margin-top:4px}
 .gr-def summary{cursor:pointer}
 .gr-def div{padding:2px 0 2px 8px;border-left:2px solid var(--line2);margin-top:2px}
+
+/* подмена тайлов: тайлсет слева, карта справа */
+.tl-views{display:flex;gap:10px;flex:1;min-height:max(480px,calc(100vh - 230px))}
+.tl-panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:8px;display:flex;flex-direction:column;min-height:0}
+.tl-set-panel{flex:none;max-width:55%}
+.tl-map-panel{flex:1;min-width:0}
+.tl-canvas-wrap{flex:1;overflow:auto;min-height:0}
+.tl-map-wrap{flex:1;position:relative;overflow:hidden;background:#000;border-radius:4px;min-height:0}
+.tl-map-wrap canvas{position:absolute;inset:0;display:block;cursor:grab}
+#tlMapHover{margin-top:4px;font-family:var(--mono)}
+.tl-level{display:flex;align-items:center;gap:8px;margin:12px 8px 4px;padding:5px 8px;border-radius:6px;
+  background:linear-gradient(90deg,#2b2140,#1d2129);border:1px solid #4b3a72;font-weight:700;font-size:13px;color:#e7dcff}
+.tl-level-n{background:#7c5cd6;color:#fff;border-radius:4px;padding:0 7px;font-family:var(--mono);font-size:13px;min-width:26px;text-align:center}
+.tl-item-u{display:flex;gap:4px;flex-wrap:wrap;margin-top:2px;white-space:normal}
+.tl-lv{display:inline-flex;align-items:center;gap:3px;font-size:11px;background:#232833;border:1px solid var(--line2);border-radius:10px;padding:0 6px 0 2px;color:var(--text)}
+.tl-lv b{background:#4b3a72;color:#e7dcff;border-radius:8px;padding:0 5px;font-family:var(--mono);font-size:10px}
+.tl-lv i{font-style:normal}

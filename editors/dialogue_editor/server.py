@@ -648,7 +648,7 @@ def api_tiles_state():
                     "odd": bool(s["to"] % 2 or s["from"] % 2)}
         x.pop('line', None); x.pop('label', None)
     usage = stcore.load_usage(CFG['project'])
-    return {"pairs": pairs, "use": usage.get("use", {}), "errors": usage.get("errors", []),
+    return {"pairs": pairs, "use": usage.get("use", {}), "levels": usage.get("levels", {}), "errors": usage.get("errors", []),
             "tilesets": stcore.list_tilesets(CFG['project']), "maps": stcore.list_maps(CFG['project']),
             "vramTiles": stcore.VRAM_TILES, "hash": _st_hash(), "table": p}
 

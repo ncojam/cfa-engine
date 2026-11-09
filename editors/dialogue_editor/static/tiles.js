@@ -101,8 +101,20 @@ function tlRender() {
   if (!TL.state) return;
   const P = TL.pairs[TL.sel];
   root.append(h('div', { class: 'tl' }, tlRenderList(), h('section', { class: 'tl-main' },
-    P ? [tlRenderHead(P), tlRenderStates(P), tlRenderTileset(), tlRenderMap()] : h('div', { class: 'empty' }, 'Таблица пуста'))));
+    P ? [tlRenderHead(P), tlRenderStates(P),
+      h('div', { class: 'tl-views' }, tlRenderTileset(), tlRenderMap())] : h('div', { class: 'empty' }, 'Таблица пуста'))));
   tlDraw();
+}
+
+// карта -> номера уровней (portTo), из mapDescs через supertile_usage.py
+function tlLevelsOf(map) {
+  return Object.entries(TL.state.levels || {}).filter(([, m]) => m === map).map(([i]) => +i);
+}
+function tlLevelChip(where) {   // "town-fun" или "town-fun (дверь из 101)"
+  const map = where.split(' ')[0], rest = where.slice(map.length).trim();
+  const lv = tlLevelsOf(map);
+  return h('span', { class: 'tl-lv', title: rest ? `${map}: подмена при входе ${rest.replace(/[()]/g, '')}` : `${map}: триггер на этой карте` },
+    lv.length ? h('b', null, lv.join('/')) : null, map, rest ? h('i', null, ' 🚪') : null);
 }
 
 function tlRenderList() {
@@ -112,16 +124,23 @@ function tlRenderList() {
     const use = tlUse(i);
     const text = `[${2 * i}] [${2 * i + 1}] ${p.name_a} ${p.name_b} ${use.join(' ')} ${(p.notes || []).join(' ')}`.toLowerCase();
     if (q && !text.includes(q)) return;
-    if (p.notes && p.notes.length && !q) for (const n of p.notes) list.append(h('div', { class: 'tl-note' }, n));
+    if (p.notes && p.notes.length && !q) for (const n of p.notes) {
+      const m = /portTo\s*=\s*(\d+)/i.exec(n);
+      if (m) {
+        const map = (TL.state.levels || {})[m[1]];
+        list.append(h('div', { class: 'tl-level' }, h('span', { class: 'tl-level-n' }, m[1]), h('span', null, map ? `map-${map}` : 'уровень ' + m[1]),
+          h('span', { class: 'tl-hint' }, ' portTo')));
+      } else list.append(h('div', { class: 'tl-note' }, n));
+    }
     list.append(h('div', { class: 'tl-item' + (i === TL.sel ? ' sel' : '') + (tlDirty(i) ? ' dirty' : ''), onclick: () => tlPick(i) },
       h('div', { class: 'tl-item-t' }, h('span', { class: 'tl-idx' }, `${2 * i}|${2 * i + 1}`), ` ${p.name_a || '?'} → ${p.name_b || '?'}`),
-      h('div', { class: 'tl-item-u' }, use.length ? use.join(', ') : 'нигде не используется')));
+      h('div', { class: 'tl-item-u' }, use.length ? use.map(tlLevelChip) : h('span', { class: 'tl-hint' }, 'нигде не используется'))));
   });
   return h('aside', { class: 'tl-list' },
     h('div', { class: 'side-tools' },
       h('input', { type: 'search', placeholder: 'Поиск: номер из tmx, название, карта…', value: TL.filter,
         oninput: e => { TL.filter = e.target.value; const s = e.target.selectionStart; tlRender(); const n = $('.tl-list input'); n.focus(); n.setSelectionRange(s, s); } }),
-      h('div', { class: 'tl-hint' }, 'Число из tmx (treetype / switch2dial / switchTile) = номер слева.')),
+      h('div', { class: 'tl-hint' }, 'Число из tmx (treetype / switch2dial / switchTile) = номер слева. Плашки — уровень (portTo) и карта, 🚪 — подмена при входе через дверь.')),
     list,
     h('div', { class: 'side-foot' },
       h('button', { class: 'btn small', onclick: tlAddPair, title: 'Новая пара в конец таблицы (номера старых не меняются)' }, '+ пара'),
@@ -193,35 +212,35 @@ function tlChanged(nameOnly) {
 function tlRenderTileset() {
   const btn = (m, label, title) => h('button', { class: 'chip' + (TL.mode === m ? ' on' : ''), title, onclick: () => { TL.mode = m; tlRender(); } }, label);
   const sel = (v, opts, on) => h('select', { onchange: e => on(+e.target.value) }, opts.map(o => h('option', { value: o, selected: o === v }, o)));
-  return h('div', { class: 'tl-block' },
+  return h('div', { class: 'tl-panel tl-set-panel' },
     h('div', { class: 'tl-tools' },
       h('b', null, 'Сжатый тайлсет'),
-      h('span', { class: 'tl-hint' }, 'мышью по тайлсету:'),
-      btn('from', '🟩 выделить «откуда»', 'Протяните по тайлам - задаст «откуда» и «сколько». Клик - сдвинуть начало.'),
-      btn('to', '🟥 выделить «куда»', 'Протяните по тайлам - задаст «куда» и «сколько». Клик - сдвинуть начало.'),
+      btn('from', '🟩 «откуда»', 'Протяните по тайлам - задаст «откуда» и «сколько». Клик - сдвинуть начало.'),
+      btn('to', '🟥 «куда»', 'Протяните по тайлам - задаст «куда» и «сколько». Клик - сдвинуть начало.'),
       h('div', { class: 'spacer' }),
       h('label', null, 'в ряд ', sel(TL.perRow, [16, 32, 64], v => { TL.perRow = v; store.set('tl.perRow', v); tlDraw(); })),
-      h('label', null, ' масштаб ', sel(TL.zoom, [1, 2, 3, 4], v => { TL.zoom = v; store.set('tl.zoom', v); tlDraw(); }))),
+      h('label', null, ' ×', sel(TL.zoom, [1, 2, 3, 4], v => { TL.zoom = v; store.set('tl.zoom', v); tlDraw(); }))),
     h('div', { class: 'tl-legend' },
-      h('span', { class: 'lg from' }, 'откуда'), h('span', { class: 'lg to' }, 'куда (эти тайлы VRAM заменятся)'),
-      h('span', { class: 'lg other' }, 'второе состояние пары'), h('span', { class: 'lg out' }, 'вне VRAM: только как «откуда»'),
+      h('span', { class: 'lg from' }, 'откуда'), h('span', { class: 'lg to' }, 'куда'),
+      h('span', { class: 'lg other' }, 'второе состояние'),
       h('span', { id: 'tlHover', class: 'tl-hover' }, '')),
     h('div', { class: 'tl-canvas-wrap' }, h('canvas', { id: 'tlSet' })));
 }
 
 function tlRenderMap() {
   const btn = (v, label) => h('button', { class: 'chip' + (TL.view === v ? ' on' : ''), onclick: () => { TL.view = v; tlRender(); } }, label);
-  const sel = (v, opts, on) => h('select', { onchange: e => on(+e.target.value) }, opts.map(o => h('option', { value: o, selected: o === v }, o)));
-  return h('div', { class: 'tl-block' },
+  return h('div', { class: 'tl-panel tl-map-panel' },
     h('div', { class: 'tl-tools' },
-      h('b', null, 'Карта ' + (TL.tmx || '')),
-      btn('none', 'без подмены'), btn('a', `как в ${2 * TL.sel}`), btn('b', `как в ${2 * TL.sel + 1}`), btn('sel', 'как в выбранном'),
-      h('label', { title: 'Обвести клетки карты, которые нарисованы тайлами из «куда»' },
-        h('input', { type: 'checkbox', checked: TL.mark, onchange: e => { TL.mark = e.target.checked; store.set('tl.mark', TL.mark); tlDraw(); } }), ' обвести меняемое'),
-      h('button', { class: 'btn small', onclick: tlScrollToChange }, '→ к изменениям'),
+      h('b', null, TL.tmx || 'Карта'),
+      btn('none', 'без подмены'), btn('a', `${2 * TL.sel}`), btn('b', `${2 * TL.sel + 1}`), btn('sel', 'выбранное'),
+      h('label', { title: 'Обвести на карте (жёлтым) области, нарисованные тайлами из «куда»' },
+        h('input', { type: 'checkbox', checked: TL.mark, onchange: e => { TL.mark = e.target.checked; store.set('tl.mark', TL.mark); tlMapPaint(); } }), ' обвести'),
       h('div', { class: 'spacer' }),
-      h('label', null, 'масштаб ', sel(TL.mapZoom, [1, 2, 3], v => { TL.mapZoom = v; store.set('tl.mapZoom', v); tlDraw(); }))),
-    h('div', { class: 'tl-map-wrap', id: 'tlMapWrap' }, TL.tmx ? h('canvas', { id: 'tlMap' }) : h('div', { class: 'tl-hint', style: 'padding:12px' }, 'Карта не выбрана — превью нет. Выберите карту в шапке.')));
+      h('button', { class: 'btn small', onclick: () => tlMapFit('all'), title: 'Вся карта' }, '⤢ целиком'),
+      h('button', { class: 'btn small', onclick: () => tlMapFit('change'), title: 'Приблизить к меняемым местам' }, '→ к изменениям'),
+      h('span', { id: 'tlMapZoom', class: 'tl-hint' }, '')),
+    h('div', { class: 'tl-map-wrap', id: 'tlMapWrap' }, TL.tmx ? h('canvas', { id: 'tlMap' }) : h('div', { class: 'tl-hint', style: 'padding:12px' }, 'Карта не выбрана — выберите в шапке.')),
+    h('div', { class: 'tl-hint', id: 'tlMapHover' }, 'колёсико — масштаб, средняя (или левая) кнопка — двигать карту'));
 }
 
 // ------------------------------------------------------------ отрисовка
@@ -236,7 +255,6 @@ async function tlDraw() {
   let ts = null;
   try { ts = await tlTileset(TL.bmp); } catch (e) { toast('Тайлсет: ' + e.message, 'err'); }
   if (!ts) return;
-  // пересчитать проверки «откуда» под только что загруженный тайлсет
   if (!tlDraw.seen || tlDraw.seen !== ts.bmp) { tlDraw.seen = ts.bmp; tlChanged(true); }
   tlDrawSet(ts, P);
   if (TL.tmx) {
@@ -258,51 +276,103 @@ function tlTilePixels(ts, t, out, ow, ox, oy, orient, transparent) {
   }
 }
 
+// Обвести ОБЛАСТЬ из клеток (а не каждую клетку): рисуем только края, у которых нет соседа.
+// cells - массив [cx, cy] в целых координатах сетки, toPx(cx, cy) -> [x, y] левый верх клетки.
+function tlOutline(g, cells, cell, toPx) {
+  const has = new Set(cells.map(([x, y]) => x + ',' + y));
+  g.beginPath();
+  for (const [x, y] of cells) {
+    const [px, py] = toPx(x, y);
+    if (!has.has(x + ',' + (y - 1))) { g.moveTo(px, py); g.lineTo(px + cell, py); }
+    if (!has.has(x + ',' + (y + 1))) { g.moveTo(px, py + cell); g.lineTo(px + cell, py + cell); }
+    if (!has.has((x - 1) + ',' + y)) { g.moveTo(px, py); g.lineTo(px, py + cell); }
+    if (!has.has((x + 1) + ',' + y)) { g.moveTo(px + cell, py); g.lineTo(px + cell, py + cell); }
+  }
+  g.stroke();
+}
+
+// Сетка тайлсета: сначала тайлы VRAM (0..v-1), потом полоса «ROM», потом остальные - с новой строки.
+function tlSetLayout(ts) {
+  const per = TL.perRow, z = TL.zoom, cell = 8 * z, v = TL.state.vramTiles, n = ts.optCount;
+  const gut = 44, head = 18, band = 26;
+  const rowsV = Math.ceil(Math.min(n, v) / per), rowsR = Math.ceil(Math.max(0, n - v) / per);
+  const romY = head + rowsV * cell;
+  const grid = t => t < v ? [t % per, Math.floor(t / per)] : [(t - v) % per, rowsV + 1000 + Math.floor((t - v) / per)];
+  const gridPx = (cx, cy) => cy < 1000 ? [gut + cx * cell, head + cy * cell] : [gut + cx * cell, romY + band + (cy - rowsV - 1000) * cell];
+  return { per, z, cell, v, n, gut, head, band, rowsV, rowsR, romY, grid, gridPx,
+    W: gut + per * cell, H: romY + (rowsR ? band + rowsR * cell : 0) };
+}
+
+function tlSheet(ts, from, to, per) {   // кусок тайлсета картинкой 1:1, per тайлов в ряд
+  const n = Math.max(0, to - from), rows = Math.ceil(n / per);
+  const off = document.createElement('canvas'); off.width = per * 8; off.height = Math.max(1, rows * 8);
+  if (!n) return off;
+  const ctx = off.getContext('2d'), img = ctx.createImageData(off.width, off.height), px = new Uint32Array(img.data.buffer);
+  px.fill(0xFF201a1a);
+  for (let k = 0; k < n; k++) tlTilePixels(ts, from + k, px, off.width, (k % per) * 8, Math.floor(k / per) * 8, 0, false);
+  ctx.putImageData(img, 0, 0);
+  return off;
+}
+
 function tlDrawSet(ts, P) {
   const cv = $('#tlSet'); if (!cv) return;
-  const n = ts.optCount, per = TL.perRow, rows = Math.ceil(n / per), z = TL.zoom, cell = 8 * z;
-  const W = per * 8, H = rows * 8;
-  if (!ts.sheet || ts.sheetPer !== per) {   // сама картинка тайлсета кэшируется
-    const off = document.createElement('canvas'); off.width = W; off.height = H;
-    const ctx = off.getContext('2d'), img = ctx.createImageData(W, H), px = new Uint32Array(img.data.buffer);
-    px.fill(0xFF201a1a);
-    for (let t = 0; t < n; t++) tlTilePixels(ts, t, px, W, (t % per) * 8, Math.floor(t / per) * 8, 0, false);
-    ctx.putImageData(img, 0, 0);
-    ts.sheet = off; ts.sheetPer = per;
-  }
-  cv.width = W * z; cv.height = H * z;
+  const L = tlSetLayout(ts), { cell, v, n, per } = L;
+  if (!ts.sheets || ts.sheets.per !== per) ts.sheets = { per, vram: tlSheet(ts, 0, Math.min(n, v), per), rom: tlSheet(ts, v, n, per) };
+  cv.width = L.W; cv.height = L.H;
   const g = cv.getContext('2d');
   g.imageSmoothingEnabled = false;
-  g.drawImage(ts.sheet, 0, 0, W * z, H * z);
-  const v = TL.state.vramTiles;
-  const xy = t => [(t % per) * cell, Math.floor(t / per) * cell];
-  // вне VRAM - притушить
-  g.fillStyle = 'rgba(0,0,0,.45)';
-  for (let t = v; t < n; t++) { const [x, y] = xy(t); g.fillRect(x, y, cell, cell); }
-  // граница VRAM
-  if (v < n) { const [x, y] = xy(v); g.strokeStyle = '#e0a43a'; g.lineWidth = 2; g.beginPath(); g.moveTo(0, y + cell); g.lineTo(x, y + cell); g.lineTo(x, y); g.lineTo(W * z, y); g.stroke(); }
-  const range = (from, len, fill, stroke, dash) => {
-    g.save(); g.fillStyle = fill; g.strokeStyle = stroke; g.lineWidth = Math.max(1, z * .75); if (dash) g.setLineDash([3, 3]);
-    for (let k = 0; k < len; k++) { const t = from + k; if (t >= rows * per) break; const [x, y] = xy(t); if (fill) g.fillRect(x, y, cell, cell); g.strokeRect(x + .5, y + .5, cell - 1, cell - 1); }
-    g.restore();
+  g.fillStyle = '#0c0d10'; g.fillRect(0, 0, L.W, L.H);
+  // шапка VRAM
+  g.fillStyle = '#1d2129'; g.fillRect(0, 0, L.W, L.head);
+  g.fillStyle = '#9fb3ff'; g.font = '600 11px system-ui'; g.textBaseline = 'middle';
+  g.fillText(`VRAM фона: тайлы 0–${Math.min(n, v) - 1} (сюда пишет «куда»)`, 6, L.head / 2);
+  g.drawImage(ts.sheets.vram, L.gut, L.head, per * cell, L.rowsV * cell);
+  if (L.rowsR) {
+    g.fillStyle = '#3a2f17'; g.fillRect(0, L.romY, L.W, L.band);
+    g.fillStyle = '#e0a43a'; g.fillRect(0, L.romY, L.W, 2);
+    g.fillStyle = '#f3c66f'; g.font = '700 12px system-ui';
+    g.fillText(`▼ ROM: тайлы ${v}–${n - 1} — в VRAM не грузятся, отсюда только берём («откуда»)`, 6, L.romY + L.band / 2 + 1);
+    g.drawImage(ts.sheets.rom, L.gut, L.romY + L.band, per * cell, L.rowsR * cell);
+  }
+  // номера строк слева
+  g.fillStyle = '#5d6573'; g.font = '10px ui-monospace, monospace'; g.textAlign = 'right';
+  const step = cell < 12 ? 4 : cell < 16 ? 2 : 1;
+  for (let r = 0; r < L.rowsV; r += step) { const [, y] = L.gridPx(0, r); g.fillText(r * per, L.gut - 4, y + cell / 2); }
+  for (let r = 0; r < L.rowsR; r += step) { const [, y] = L.gridPx(0, L.rowsV + 1000 + r); g.fillText(v + r * per, L.gut - 4, y + cell / 2); }
+  g.textAlign = 'left';
+
+  const cellsOf = (from, len) => { const out = []; for (let k = 0; k < len; k++) { const t = from + k; if (t < 0 || t >= n) break; out.push(L.grid(t)); } return out; };
+  const area = (from, len, fill, stroke, dash, w) => {
+    const cs = cellsOf(from, len); if (!cs.length) return;
+    if (fill) { g.fillStyle = fill; for (const [cx, cy] of cs) { const [x, y] = L.gridPx(cx, cy); g.fillRect(x, y, cell, cell); } }
+    g.save(); if (dash) g.setLineDash([4, 3]);
+    if (!dash) { g.strokeStyle = 'rgba(0,0,0,.8)'; g.lineWidth = (w || 2) + 2; tlOutline(g, cs, cell, L.gridPx); }
+    g.strokeStyle = stroke; g.lineWidth = w || 2; tlOutline(g, cs, cell, L.gridPx); g.restore();
   };
   const other = P[TL.side === 'a' ? 'b' : 'a'], s = P[TL.side];
-  range(other.from, other.len, null, 'rgba(120,200,255,.6)', true);
-  range(other.to, other.len, null, 'rgba(255,150,220,.6)', true);
-  range(s.to, s.len, 'rgba(239,91,91,.28)', '#ef5b5b');
-  range(s.from, s.len, 'rgba(79,191,114,.28)', '#4fbf72');
-  if (TL.drag) { const a = Math.min(TL.drag.a, TL.drag.b), b = Math.max(TL.drag.a, TL.drag.b); range(a, b - a + 1, 'rgba(255,255,255,.25)', '#fff'); }
+  area(other.from, other.len, null, 'rgba(120,200,255,.75)', true, 1.5);
+  area(other.to, other.len, null, 'rgba(255,150,220,.75)', true, 1.5);
+  area(s.to, s.len, 'rgba(239,91,91,.25)', '#ef5b5b');
+  area(s.from, s.len, 'rgba(79,191,114,.25)', '#4fbf72');
+  if (TL.drag) { const a = Math.min(TL.drag.a, TL.drag.b), b = Math.max(TL.drag.a, TL.drag.b); area(a, b - a + 1, 'rgba(255,255,255,.22)', '#fff'); }
 
-  const cellAt = e => { const r = cv.getBoundingClientRect(); const cx = Math.floor((e.clientX - r.left) / cell), cy = Math.floor((e.clientY - r.top) / cell); return cx < 0 || cx >= per ? -1 : cy * per + cx; };
+  const cellAt = e => {
+    const r = cv.getBoundingClientRect(), x = (e.clientX - r.left) * cv.width / r.width - L.gut, y = (e.clientY - r.top) * cv.height / r.height;
+    if (x < 0) return -1;
+    const cx = Math.floor(x / cell); if (cx >= per) return -1;
+    if (y >= L.head && y < L.romY) { const t = Math.floor((y - L.head) / cell) * per + cx; return t < Math.min(n, v) ? t : -1; }
+    if (y >= L.romY + L.band) { const t = v + Math.floor((y - L.romY - L.band) / cell) * per + cx; return t < n ? t : -1; }
+    return -1;
+  };
   cv.onmousemove = e => {
-    const t = cellAt(e); if (t < 0 || t >= n) { $('#tlHover').textContent = ''; return; }
+    const t = cellAt(e); if (t < 0) { $('#tlHover').textContent = ''; return; }
     if (TL.drag) { TL.drag.b = t; tlDrawSet(ts, P); }
-    let txt = `тайл ${t} (в коде ${t * 2})` + (t >= v ? ' · вне VRAM' : '');
-    if (t >= s.from && t < s.from + s.len) txt += ` · встанет в VRAM ${s.to + t - s.from}`;
-    if (t >= s.to && t < s.to + s.len) txt += ` · сюда встанет тайл ${s.from + t - s.to}`;
+    let txt = `тайл ${t} (в коде ${t * 2})` + (t >= v ? ' · ROM' : '');
+    if (t >= s.from && t < s.from + s.len) txt += ` → VRAM ${s.to + t - s.from}`;
+    if (t >= s.to && t < s.to + s.len) txt += ` ← тайл ${s.from + t - s.to}`;
     $('#tlHover').textContent = txt;
   };
-  cv.onmousedown = e => { const t = cellAt(e); if (t < 0 || t >= n) return; TL.drag = { a: t, b: t }; e.preventDefault(); };
+  cv.onmousedown = e => { if (e.button !== 0) return; const t = cellAt(e); if (t < 0) return; TL.drag = { a: t, b: t }; e.preventDefault(); };
   cv.onmouseleave = () => { $('#tlHover').textContent = ''; };
   window.onmouseup = () => {
     if (!TL.drag) return;
@@ -314,50 +384,115 @@ function tlDrawSet(ts, P) {
   };
 }
 
+// ---- карта: собираем картинку 1:1 в offscreen, показываем через «камеру» (масштаб колёсиком, перетаскивание)
 function tlDrawMap(ts, map) {
-  const cv = $('#tlMap'); if (!cv || !map) return;
+  if (!$('#tlMap') || !map) return;
   const layers = map.layers.filter(l => !l.walls);
   if (!layers.length) return;
   const mw = Math.max(...layers.map(l => l.w)), mh = Math.max(...layers.map(l => l.h));
   const W = mw * 8, H = mh * 8, v = TL.state.vramTiles;
-  // что лежит в каждом тайле VRAM при выбранном режиме
   const vram = new Int32Array(v); for (let k = 0; k < v; k++) vram[k] = k < ts.optCount ? k : -1;
   const s = tlStateFor(TL.view);
   if (s) for (let k = 0; k < s.len; k++) { const d = s.to + k, f = s.from + k; if (d >= 0 && d < v) vram[d] = f < ts.optCount ? f : -1; }
-  const mk = TL.mark ? (tlStateFor('sel') || TL.pairs[TL.sel].a) : null;
-  cv.width = W; cv.height = H;
-  cv.style.width = (W * TL.mapZoom) + 'px'; cv.style.height = (H * TL.mapZoom) + 'px';
-  const g = cv.getContext('2d'), img = g.createImageData(W, H), px = new Uint32Array(img.data.buffer);
+  const mk = tlStateFor('sel') || TL.pairs[TL.sel].a;
+  const key = JSON.stringify([map.tmx, ts.bmp, s ? [s.to, s.from, s.len] : null, [mk.to, mk.len]]);
+  if (TL.mapKey === key && TL.mapImg && TL.mv && TL.mv.tmx === map.tmx) { tlMapBind(); tlMapPaint(); return; }
+  TL.mapKey = key;
+  const off = document.createElement('canvas'); off.width = W; off.height = H;
+  const g = off.getContext('2d'), img = g.createImageData(W, H), px = new Uint32Array(img.data.buffer);
   px.fill(ts.pal32[0]);
-  const marked = [];
-  layers.forEach((L, li) => {
-    for (let y = 0; y < L.h; y++) for (let x = 0; x < L.w; x++) {
-      const r = L.data[y * L.w + x];
+  const marked = new Set();
+  layers.forEach((Ly, li) => {
+    for (let y = 0; y < Ly.h; y++) for (let x = 0; x < Ly.w; x++) {
+      const r = Ly.data[y * Ly.w + x];
       if (li > 0 && r === 0) continue;
       const e = ts.opt[r];
       if (e === undefined) continue;
       const oi = e & 1023, orient = e >> 10;
-      if (oi >= v || vram[oi] < 0) {   // за VRAM или мусор - пурпурным
+      if (oi >= v || vram[oi] < 0) {
         for (let yy = 0; yy < 8; yy++) for (let xx = 0; xx < 8; xx++) px[(y * 8 + yy) * W + x * 8 + xx] = ((xx + yy) & 2) ? 0xFFFF00FF : 0xFF400040;
         continue;
       }
       tlTilePixels(ts, vram[oi], px, W, x * 8, y * 8, orient, li > 0);
-      if (mk && oi >= mk.to && oi < mk.to + mk.len) marked.push([x, y]);
+      if (oi >= mk.to && oi < mk.to + mk.len) marked.add(x + ',' + y);
     }
   });
   g.putImageData(img, 0, 0);
-  if (marked.length) {
-    g.strokeStyle = 'rgba(239,91,91,.9)'; g.lineWidth = 1;
-    for (const [x, y] of marked) g.strokeRect(x * 8 + .5, y * 8 + .5, 7, 7);
-  }
-  TL.marked = marked;
+  const newMap = !TL.mv || TL.mv.tmx !== map.tmx || TL.mv.W !== W || TL.mv.H !== H;
+  TL.mapImg = off;
+  TL.marked = [...marked].map(k => k.split(',').map(Number));
+  if (newMap) { TL.mv = { tmx: map.tmx, W, H, s: 1, ox: 0, oy: 0 }; }
+  tlMapBind();
+  if (newMap) tlMapFit('all'); else tlMapPaint();
 }
 
-function tlScrollToChange() {
-  const w = $('#tlMapWrap'); if (!w || !TL.marked || !TL.marked.length) { toast('На карте нет клеток с этими тайлами'); return; }
-  const xs = TL.marked.map(m => m[0]), ys = TL.marked.map(m => m[1]);
-  const cx = (Math.min(...xs) + Math.max(...xs)) / 2 * 8 * TL.mapZoom, cy = (Math.min(...ys) + Math.max(...ys)) / 2 * 8 * TL.mapZoom;
-  w.scrollTo({ left: cx - w.clientWidth / 2, top: cy - w.clientHeight / 2, behavior: 'smooth' });
+function tlMapBind() {
+  const cv = $('#tlMap'), wrap = $('#tlMapWrap'); if (!cv || cv._bound) return;
+  cv._bound = true;
+  if (TL.ro) TL.ro.disconnect();
+  TL.ro = new ResizeObserver(() => tlMapPaint()); TL.ro.observe(wrap);
+  cv.addEventListener('wheel', e => {
+    e.preventDefault();
+    const r = cv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top, mv = TL.mv;
+    const k = Math.exp(-e.deltaY * 0.0015), ns = Math.min(16, Math.max(tlMapFitScale() * 0.5, mv.s * k));
+    mv.ox = mx - (mx - mv.ox) * ns / mv.s; mv.oy = my - (my - mv.oy) * ns / mv.s; mv.s = ns;
+    tlMapPaint();
+  }, { passive: false });
+  cv.addEventListener('mousedown', e => {
+    if (e.button !== 1 && e.button !== 0) return;
+    e.preventDefault();   // средняя кнопка: без автопрокрутки браузера
+    TL.pan = { x: e.clientX, y: e.clientY, ox: TL.mv.ox, oy: TL.mv.oy };
+    cv.style.cursor = 'grabbing';
+  });
+  cv.addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
+}
+
+// перетаскивание карты и подсказка под курсором - один раз на всё окно
+addEventListener('mousemove', e => {
+  const cv = $('#tlMap');
+  if (TL.pan && TL.mv) { TL.mv.ox = TL.pan.ox + e.clientX - TL.pan.x; TL.mv.oy = TL.pan.oy + e.clientY - TL.pan.y; tlMapPaint(); return; }
+  if (!cv || e.target !== cv || !TL.mv) return;
+  const r = cv.getBoundingClientRect(), wx = Math.floor((e.clientX - r.left - TL.mv.ox) / TL.mv.s / 8), wy = Math.floor((e.clientY - r.top - TL.mv.oy) / TL.mv.s / 8);
+  const hv = $('#tlMapHover'); if (hv) hv.textContent = `клетка ${wx}, ${wy} (пиксели ${wx * 8}, ${wy * 8}) · колёсико — масштаб, средняя/левая кнопка — двигать`;
+});
+addEventListener('mouseup', () => { if (TL.pan) { TL.pan = null; const c = $('#tlMap'); if (c) c.style.cursor = ''; } });
+
+function tlMapFitScale(bw, bh) {
+  const wrap = $('#tlMapWrap'), mv = TL.mv; if (!wrap || !mv) return 1;
+  return Math.min(wrap.clientWidth / (bw || mv.W), wrap.clientHeight / (bh || mv.H));
+}
+
+function tlMapFit(what) {
+  const wrap = $('#tlMapWrap'), mv = TL.mv; if (!wrap || !mv) return;
+  let x0 = 0, y0 = 0, x1 = mv.W, y1 = mv.H;
+  if (what === 'change') {
+    if (!TL.marked || !TL.marked.length) { toast('На карте нет клеток с этими тайлами'); return; }
+    const xs = TL.marked.map(m => m[0]), ys = TL.marked.map(m => m[1]);
+    x0 = (Math.min(...xs) - 4) * 8; y0 = (Math.min(...ys) - 4) * 8; x1 = (Math.max(...xs) + 5) * 8; y1 = (Math.max(...ys) + 5) * 8;
+  }
+  const s = Math.min(what === 'change' ? 6 : 16, tlMapFitScale(x1 - x0, y1 - y0));
+  mv.s = s; mv.ox = (wrap.clientWidth - (x1 - x0) * s) / 2 - x0 * s; mv.oy = (wrap.clientHeight - (y1 - y0) * s) / 2 - y0 * s;
+  tlMapPaint();
+}
+
+function tlMapPaint() {
+  const cv = $('#tlMap'), wrap = $('#tlMapWrap'), mv = TL.mv; if (!cv || !wrap || !mv || !TL.mapImg) return;
+  const dpr = window.devicePixelRatio || 1, cw = wrap.clientWidth, ch = wrap.clientHeight;
+  if (cv.width !== Math.round(cw * dpr) || cv.height !== Math.round(ch * dpr)) { cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr); cv.style.width = cw + 'px'; cv.style.height = ch + 'px'; }
+  const g = cv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.fillStyle = '#000'; g.fillRect(0, 0, cw, ch);
+  g.imageSmoothingEnabled = false;
+  g.drawImage(TL.mapImg, mv.ox, mv.oy, mv.W * mv.s, mv.H * mv.s);
+  g.strokeStyle = '#333a46'; g.lineWidth = 1; g.strokeRect(mv.ox - .5, mv.oy - .5, mv.W * mv.s + 1, mv.H * mv.s + 1);
+  if (TL.mark && TL.marked && TL.marked.length) {
+    const c = 8 * mv.s, toPx = (x, y) => [mv.ox + x * c, mv.oy + y * c];
+    g.fillStyle = 'rgba(255,212,0,.16)';
+    for (const [x, y] of TL.marked) { const [px, py] = toPx(x, y); g.fillRect(px, py, c, c); }
+    g.strokeStyle = 'rgba(0,0,0,.85)'; g.lineWidth = 4; tlOutline(g, TL.marked, c, toPx);   // тёмная подложка - видно на любом фоне
+    g.strokeStyle = '#ffd400'; g.lineWidth = 2; tlOutline(g, TL.marked, c, toPx);
+  }
+  const z = $('#tlMapZoom'); if (z) z.textContent = `${Math.round(mv.s * 100)}%`;
 }
 
 // ------------------------------------------------------------ правки / сохранение
