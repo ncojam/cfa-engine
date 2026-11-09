@@ -281,3 +281,59 @@ details.more>summary:hover{color:var(--muted)}
 .pv-row img.pv-spr,.pv-spr{image-rendering:pixelated;object-fit:contain;background:none;flex:none}
 .pv-row img.pv-spr.sm{width:16px;height:32px}
 .pv-spr.lg{width:32px;height:64px}
+
+/* ---------------- вкладки */
+#tabs{display:flex;gap:2px;margin-left:10px}
+.tab{background:transparent;border:1px solid transparent;border-radius:var(--r);padding:5px 10px;cursor:pointer;color:var(--muted);white-space:nowrap}
+.tab:hover{color:var(--text);background:var(--panel2)}
+.tab.on{color:var(--text);background:var(--panel2);border-color:var(--line2);box-shadow:inset 0 -2px 0 var(--accent)}
+body:not(.tab-dialogs) #sidebar,body:not(.tab-dialogs) #issuesBadge,body:not(.tab-dialogs) .dlg-only{display:none !important}
+#tiles,#npc{height:100%}
+#npc .empty{height:100%}
+
+/* ---------------- подмена тайлов */
+.tl{display:flex;height:100%;min-height:0}
+.tl-list{width:330px;min-width:260px;background:var(--bg2);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.tl-list input[type=search]{width:100%;background:var(--panel);border:1px solid var(--line2);border-radius:var(--r);padding:6px 9px;outline:none}
+.tl-items{flex:1;overflow:auto;padding:4px 0 20px}
+.tl-note{padding:8px 10px 2px;font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+.tl-item{padding:4px 10px;cursor:pointer;border-left:2px solid transparent}
+.tl-item:hover{background:#1a1e26}
+.tl-item.sel{background:#22262f;border-left-color:var(--accent)}
+.tl-item.dirty .tl-item-t::after{content:" ●";color:var(--wip)}
+.tl-item-t{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tl-item-u{font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tl-idx{font-family:var(--mono);font-size:12px;color:var(--accent2)}
+.tl-idx.big{font-size:15px;font-weight:700}
+.tl-hint{font-size:11px;color:var(--dim)}
+.tl-main{flex:1;overflow:auto;padding:12px 14px 40px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.tl-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.tl-head select,.tl-tools select{background:var(--panel);border:1px solid var(--line2);border-radius:var(--r);padding:3px 6px}
+.tl-title{display:flex;flex-direction:column}
+.tl-uses{font-size:12px;color:var(--muted)}
+.tl-states{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:900px){.tl-states{grid-template-columns:1fr}}
+.tl-state{background:var(--panel);border:1px solid var(--line2);border-radius:var(--r);padding:8px 10px;cursor:pointer}
+.tl-state.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.tl-state-h{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+.tl-name{flex:1;background:var(--bg2);border:1px solid var(--line);border-radius:4px;padding:3px 6px;color:var(--text);font-size:13px}
+.tl-nums{display:flex;gap:10px;margin:8px 0 4px}
+.tl-num{display:flex;flex-direction:column;font-size:11px;color:var(--muted)}
+.tl-num input{width:96px;background:var(--bg2);border:1px solid var(--line2);border-radius:4px;padding:3px 6px;font-family:var(--mono)}
+.tl-code{font-family:var(--mono);font-size:11px;color:var(--dim)}
+.tl-issue{font-size:12px;margin-top:3px}
+.tl-issue.err{color:var(--err)}
+.tl-issue.warn{color:var(--warn)}
+.tl-block{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:8px}
+.tl-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;font-size:13px}
+.tl-legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-bottom:6px;align-items:center}
+.tl-legend .lg::before{content:"";display:inline-block;width:10px;height:10px;margin-right:4px;vertical-align:-1px;border-radius:2px}
+.lg.from::before{background:rgba(79,191,114,.5);border:1px solid #4fbf72}
+.lg.to::before{background:rgba(239,91,91,.5);border:1px solid #ef5b5b}
+.lg.other::before{border:1px dashed rgba(120,200,255,.8)}
+.lg.out::before{background:#000;border:1px solid #e0a43a}
+.tl-hover{margin-left:auto;font-family:var(--mono);color:var(--text)}
+.tl-canvas-wrap{overflow:auto;max-height:60vh}
+.tl-canvas-wrap canvas{display:block;cursor:crosshair}
+.tl-map-wrap{overflow:auto;max-height:70vh;background:#000}
+.tl-map-wrap canvas{display:block;image-rendering:pixelated}

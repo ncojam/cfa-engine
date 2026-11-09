@@ -3,23 +3,28 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Graveblood · Dialogues</title>
+<title>Graveblood · Editors</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <header id="topbar">
-  <button id="btnSidebar" class="icon-btn" title="Показать/скрыть панель (Ctrl+B)">☰</button>
-  <div class="brand">GRAVEBLOOD <span>dialogue editor</span></div>
-  <div id="crumbs"></div>
+  <button id="btnSidebar" class="icon-btn dlg-only" title="Показать/скрыть панель (Ctrl+B)">☰</button>
+  <div class="brand">GRAVEBLOOD <span>editors</span></div>
+  <nav id="tabs">
+    <button class="tab" data-tab="dialogs" title="Редактор диалогов">💬 Диалоги</button>
+    <button class="tab" data-tab="portraits" title="Портреты персонажей: что есть, что используется, что дорисовать">🖼 Портреты</button>
+    <button class="tab" data-tab="tiles" title="Подмена тайлов на лету (fgtile, supertiles.cpp)">🧩 Подмена тайлов</button>
+    <button class="tab" data-tab="npc" title="Скоро: редактор взаимодействий с NPC">🧑 NPC</button>
+  </nav>
+  <div id="crumbs" class="dlg-only"></div>
   <div class="spacer"></div>
-  <span id="issuesBadge" class="badge" hidden></span>
-  <button id="btnPortraits" class="btn" title="Портреты персонажей: что есть, что используется, что дорисовать">🖼 Портреты</button>
-  <button id="btnPlay" class="btn" title="Прогнать текущий диалог">▶ Прогон</button>
-  <button id="btnUndo" class="icon-btn" title="Отменить (Ctrl+Z)">↶</button>
-  <button id="btnRedo" class="icon-btn" title="Повторить (Ctrl+Shift+Z)">↷</button>
+  <span id="issuesBadge" class="badge dlg-only" hidden></span>
+  <button id="btnPlay" class="btn dlg-only" title="Прогнать текущий диалог">▶ Прогон</button>
+  <button id="btnUndo" class="icon-btn dlg-only" title="Отменить (Ctrl+Z)">↶</button>
+  <button id="btnRedo" class="icon-btn dlg-only" title="Повторить (Ctrl+Shift+Z)">↷</button>
   <button id="btnSettings" class="icon-btn" title="Настройки">⚙</button>
-  <button id="btnReload" class="btn" title="Перечитать файлы с диска">⟳ С диска</button>
-  <button id="btnSave" class="btn primary" title="Сохранить в dialogues.cpp/.h (Ctrl+S)">Сохранить</button>
+  <button id="btnReload" class="btn dlg-only" title="Перечитать файлы с диска">⟳ С диска</button>
+  <button id="btnSave" class="btn primary dlg-only" title="Сохранить в dialogues.cpp/.h (Ctrl+S)">Сохранить</button>
 </header>
 
 <div id="layout">
@@ -48,6 +53,8 @@
     </div>
     <div id="editor" hidden></div>
     <div id="portraits" hidden></div>
+    <div id="tiles" hidden></div>
+    <div id="npc" hidden></div>
   </main>
 </div>
 
@@ -58,5 +65,7 @@
 <script src="/static/gba.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/portraits.js"></script>
+<script src="/static/tiles.js"></script>
+<script src="/static/tabs.js"></script>
 </body>
 </html>

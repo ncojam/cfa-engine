@@ -45,16 +45,14 @@ async function pvLoad() {
 async function openPortraits(cid) {
   PV.open = true;
   if (cid != null) PV.cid = cid;
-  $('#empty').hidden = true; $('#editor').hidden = true; $('#portraits').hidden = false;
-  $('#btnPortraits').classList.add('on');
+  $('#portraits').hidden = false;   // какие вкладки скрыть - решает tabs.js
   try { await pvLoad(); } catch (e) { toast('Портреты: ' + e.message, 'err'); }
   renderPortraits();
 }
 function closePortraits() {
   if (!PV.open) return;
   PV.open = false;
-  $('#portraits').hidden = true; $('#btnPortraits').classList.remove('on');
-  renderEditor();
+  $('#portraits').hidden = true;
 }
 
 function pvImg(cid, emo, src) {
@@ -213,9 +211,4 @@ async function pvConvert(direction, ids, extra = {}) {
 }
 
 // ---------- wiring
-$('#btnPortraits').onclick = () => PV.open ? closePortraits() : openPortraits();
-{
-  const _select = select;
-  // eslint-disable-next-line no-global-assign
-  select = function (name, scrollTo) { if (PV.open) { PV.open = false; $('#portraits').hidden = true; $('#btnPortraits').classList.remove('on'); } return _select(name, scrollTo); };
-}
+// переключение вкладок и переход к диалогу из портретов - в tabs.js

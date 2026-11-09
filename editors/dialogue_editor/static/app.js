@@ -605,6 +605,7 @@ function renderHeaderOnly() {
   old.replaceWith(renderHeader(S.cur));
 }
 function renderEditor() {
+  if (typeof TABS !== 'undefined' && TABS.cur !== 'dialogs') return;   // открыта другая вкладка
   const ed = $('#editor');
   if (!S.cur) { ed.hidden = true; $('#empty').hidden = false; updateTop(); return; }
   $('#empty').hidden = true; ed.hidden = false;
@@ -1215,6 +1216,7 @@ function setup() {
     S.filter = b.dataset.f; $$('#statusFilter .chip').forEach(x => x.classList.toggle('on', x === b)); renderTree();
   });
   addEventListener('keydown', e => {
+    if (typeof TABS !== 'undefined' && TABS.cur !== 'dialogs' && e.key !== 'Escape') return;   // у других вкладок свои клавиши
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); save(); }
     else if (mod && e.key.toLowerCase() === 'b') { e.preventDefault(); toggleSidebar(); }

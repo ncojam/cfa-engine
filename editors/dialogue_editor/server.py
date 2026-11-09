@@ -24,11 +24,12 @@ import time
 import webbrowser
 import zlib
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import dlgcore  # noqa: E402
+import stcore  # noqa: E402
 
 PORTRAITS_DIR = os.path.normpath(os.path.join(HERE, '..', 'portraits'))
 sys.path.insert(0, PORTRAITS_DIR)
@@ -619,6 +620,74 @@ def api_save(body):
     return 200, {"ok": True, "changed": changed, "hash": files_hash(), "model": model}
 
 
+# ------------------------------------------------------------------ вкладка «Подмена тайлов»
+
+TILESET_CACHE = {}
+
+
+def _st_table():
+    return stcore.paths(CFG['project'])['table']
+
+
+def _st_hash():
+    with open(_st_table(), 'rb') as f:
+        return hashlib.sha1(f.read()).hexdigest()
+
+
+def api_tiles_state():
+    p = _st_table()
+    if not os.path.isfile(p):
+        return {"error": "нет %s" % p}
+    with open(p, encoding='utf-8') as f:
+        _, pairs, _ = stcore.parse_table(f.read())
+    for x in pairs:   # в тайлах, как их видит редактор
+        for k in ('a', 'b'):
+            s = x[k]
+            x[k] = {"to": s["to"] // 2, "from": s["from"] // 2, "len": s["len"],
+                    "odd": bool(s["to"] % 2 or s["from"] % 2)}
+        x.pop('line', None); x.pop('label', None)
+    usage = stcore.load_usage(CFG['project'])
+    return {"pairs": pairs, "use": usage.get("use", {}), "errors": usage.get("errors", []),
+            "tilesets": stcore.list_tilesets(CFG['project']), "maps": stcore.list_maps(CFG['project']),
+            "vramTiles": stcore.VRAM_TILES, "hash": _st_hash(), "table": p}
+
+
+def _safe_name(name, ext):
+    name = os.path.basename(name or '')
+    if not name.endswith(ext):
+        raise ValueError('bad name')
+    return name
+
+
+def api_tiles_tileset(bmp, unless):
+    path = os.path.join(stcore.paths(CFG['project'])['images'], _safe_name(bmp, '.bmp'))
+    key = (path, os.path.getmtime(path), unless)
+    if key not in TILESET_CACHE:
+        TILESET_CACHE.clear()
+        TILESET_CACHE[key] = stcore.compress_tileset(path, unless)
+    return TILESET_CACHE[key]
+
+
+def api_tiles_map(tmx):
+    return stcore.read_tmx(os.path.join(stcore.paths(CFG['project'])['resources'], _safe_name(tmx, '.tmx')))
+
+
+def api_tiles_save(body):
+    if body.get('hash') != _st_hash() and not body.get('force'):
+        return 409, {"error": "supertiles.cpp изменился на диске после загрузки. Перечитайте или сохраните принудительно."}
+    p = _st_table()
+    with open(p, encoding='utf-8') as f:
+        old = f.read()
+    new = stcore.save_table(old, body.get('edits') or [])
+    if new != old:
+        os.makedirs(os.path.join(HERE, 'backups'), exist_ok=True)
+        shutil.copy2(p, os.path.join(HERE, 'backups', 'supertiles_%s.cpp' % time.strftime('%Y%m%d_%H%M%S')))
+        with open(p, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(new)
+        stcore.refresh_usage(CFG['project'])
+    return 200, dict(api_tiles_state(), ok=True, changed=new != old)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = 'GBDialogueEditor/1.0'
 
@@ -659,6 +728,15 @@ class Handler(BaseHTTPRequestHandler):
                 if png is None:
                     return self._send(404, {"error": "no portrait"})
                 return self._send(200, png, 'image/png')
+            if path.startswith('/api/tiles/'):
+                q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+                with LOCK:
+                    if path == '/api/tiles/state':
+                        return self._send(200, api_tiles_state())
+                    if path == '/api/tiles/tileset':
+                        return self._send(200, api_tiles_tileset(q.get('bmp'), q.get('unless') == '1'))
+                    if path == '/api/tiles/map':
+                        return self._send(200, api_tiles_map(q.get('tmx')))
             if path == '/api/portraits/status':
                 with LOCK:
                     return self._send(200, api_portraits_status())
@@ -697,6 +775,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, {"ok": True})
                 if path == '/api/portraits/convert':
                     return self._send(200, api_portraits_convert(body))
+                if path == '/api/tiles/save':
+                    code, res = api_tiles_save(body)
+                    return self._send(code, res)
                 if path == '/api/rescan':
                     index_inc_files()
                     PORTRAIT_CACHE.clear()
