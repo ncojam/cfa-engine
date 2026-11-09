@@ -70,7 +70,7 @@ static std::string reportText(App& a) {
 // ============================ таймлайн ============================
 
 static void timelineBar(App& a) {
-	const float w = ImGui::GetContentRegionAvail().x, h = 26;
+	const float w = ImGui::GetContentRegionAvail().x, h = 36;
 	const ImVec2 p0 = ImGui::GetCursorScreenPos();
 	ImGui::InvisibleButton("bar", ImVec2(w, h));
 	ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -91,7 +91,7 @@ static void timelineBar(App& a) {
 		if (!a.paused) a.pause();
 		if (f != a.view) a.seek(f);
 	}
-	if (ImGui::IsItemHovered()) ImGui::SetTooltip("frame %lld", (long long)f);
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("frame %lld - click or drag to go there", (long long)f);
 }
 
 void timelineWindow(App& a, uint32_t liveKeys) {
@@ -103,6 +103,12 @@ void timelineWindow(App& a, uint32_t liveKeys) {
 	ImGui::SameLine(); if (ImGui::Button("+1")) a.step(1, liveKeys);
 	ImGui::SameLine(); if (ImGui::Button("+10")) a.step(10, liveKeys);
 	ImGui::SameLine(); if (ImGui::Button(">|")) { a.pause(); a.seek((int64_t)a.hist.end() - 1); }
+	ImGui::SameLine();
+	static int gotoFrame = 0;
+	ImGui::SetNextItemWidth(90);
+	if (ImGui::InputInt("##goto", &gotoFrame, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue)) { a.pause(); a.seek(gotoFrame); }
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("type a frame number and press Enter");
+	ImGui::SameLine(); if (ImGui::Button("go")) { a.pause(); a.seek(gotoFrame); }
 
 	const uint32_t first = a.hist.first(), last = a.hist.empty() ? 0 : a.hist.end() - 1;
 	ImGui::Text("frame %lld   history %u..%u (%.1f s)   %.1f / %d MB", (long long)a.view, first, last,
