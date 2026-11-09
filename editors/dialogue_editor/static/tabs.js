@@ -17,6 +17,10 @@ const TAB_DEFS = {
     open() { openTiles(); },
     close() { $('#tiles').hidden = true; },
   },
+  groups: {
+    open() { openGroups(); },
+    close() { $('#groups').hidden = true; },
+  },
   npc: {
     open() {
       const root = $('#npc'); root.hidden = false; root.innerHTML = '';

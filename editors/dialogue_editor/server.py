@@ -30,6 +30,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import dlgcore  # noqa: E402
 import stcore  # noqa: E402
+import grcore  # noqa: E402
 
 PORTRAITS_DIR = os.path.normpath(os.path.join(HERE, '..', 'portraits'))
 sys.path.insert(0, PORTRAITS_DIR)
@@ -688,6 +689,64 @@ def api_tiles_save(body):
     return 200, dict(api_tiles_state(), ok=True, changed=new != old)
 
 
+# ------------------------------------------------------------------ вкладка «Группы»
+
+def _gr_paths():
+    src = os.path.join(CFG['project'], 'src')
+    return os.path.join(src, 'groups.h'), os.path.join(src, 'groups.cpp')
+
+
+def _gr_hash():
+    hh = hashlib.sha1()
+    for p in _gr_paths():
+        if os.path.isfile(p):
+            with open(p, 'rb') as f:
+                hh.update(f.read())
+    return hh.hexdigest()
+
+
+def _gr_names():
+    pers = os.path.join(CFG['project'], 'src', 'persons.cpp')
+    return dlgcore.parse_characters(read_text(pers)[0]) if os.path.isfile(pers) else []
+
+
+def api_groups_state():
+    hp, cp = _gr_paths()
+    if not (os.path.isfile(hp) and os.path.isfile(cp)):
+        return {"error": "нет %s / %s" % (hp, cp)}
+    with open(hp, encoding='utf-8') as f:
+        h = f.read()
+    with open(cp, encoding='utf-8') as f:
+        c = f.read()
+    model = grcore.parse(h, c)
+    dlg = read_text(CFG['cpp'])[0]
+    return {"model": model, "situations": grcore.SITUATIONS, "levels": grcore.LEVELS, "textMax": grcore.TEXT_MAX,
+            "subjects": grcore.parse_subjects(dlg)[:9], "defaults": grcore.parse_defaults(dlg),
+            "names": _gr_names(), "hash": _gr_hash(), "files": [hp, cp]}
+
+
+def api_groups_save(body):
+    if body.get('hash') != _gr_hash() and not body.get('force'):
+        return 409, {"error": "groups.h/.cpp изменились на диске после загрузки. Перечитайте или сохраните принудительно."}
+    model = body['model']
+    errs = grcore.validate(model)
+    if errs:
+        return 400, {"error": "; ".join(errs[:5])}
+    h, c = grcore.generate(model, _gr_names())
+    changed = False
+    stamp = time.strftime('%Y%m%d_%H%M%S')
+    for path, text in zip(_gr_paths(), (h, c)):
+        old = open(path, encoding='utf-8').read() if os.path.isfile(path) else None
+        if old != text:
+            if old is not None:
+                os.makedirs(os.path.join(HERE, 'backups'), exist_ok=True)
+                shutil.copy2(path, os.path.join(HERE, 'backups', '%s_%s' % (stamp, os.path.basename(path))))
+            with open(path, 'w', encoding='utf-8', newline='\n') as f:
+                f.write(text)
+            changed = True
+    return 200, dict(api_groups_state(), ok=True, changed=changed)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = 'GBDialogueEditor/1.0'
 
@@ -737,6 +796,9 @@ class Handler(BaseHTTPRequestHandler):
                         return self._send(200, api_tiles_tileset(q.get('bmp'), q.get('unless') == '1'))
                     if path == '/api/tiles/map':
                         return self._send(200, api_tiles_map(q.get('tmx')))
+            if path == '/api/groups/state':
+                with LOCK:
+                    return self._send(200, api_groups_state())
             if path == '/api/portraits/status':
                 with LOCK:
                     return self._send(200, api_portraits_status())
@@ -775,6 +837,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, {"ok": True})
                 if path == '/api/portraits/convert':
                     return self._send(200, api_portraits_convert(body))
+                if path == '/api/groups/save':
+                    code, res = api_groups_save(body)
+                    return self._send(code, res)
                 if path == '/api/tiles/save':
                     code, res = api_tiles_save(body)
                     return self._send(code, res)
