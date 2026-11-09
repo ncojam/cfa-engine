@@ -16,7 +16,7 @@ NAME_MAX = 26            # Interact::name[27]
 # Для кнопки «код» в редакторе: где искать обработчик.
 HANDLERS = {
     (1, 0):  {"label": "Темы разговора (listSubjects 0..)", "code": "player_interaction.cpp: executeInteractionEffect, attrib == 0 (TALK/CRITICIZE по interactDirection)"},
-    (1, 10): {"label": "Ask about (listSubjects 10..14)", "code": "нет обработчика: executeInteractionEffect упадёт в «Shiiiiiiit»"},
+    (1, 10): {"label": "Ask about (listSubjects 10..14)", "code": "player_interaction.cpp: attrib == ASK_ABOUT_LIST -> Social::ask (social.cpp), ответы - personality.cpp (вкладка «Персонажи»)"},
     (1, 15): {"label": "Совместные занятия (Companions::ACTIVITY_LIST)", "code": "player_interaction.cpp: attrib == Companions::ACTIVITY_LIST; список - Companions::listActivities"},
     (1, 50): {"label": "Шутка о группе (Jokes::GROUP_LIST)", "code": "player_interaction.cpp: attrib == Jokes::GROUP_LIST -> Jokes::tell(..., ABOUT_GROUP, группа); список - Jokes::listGroups"},
     (2, 14): {"label": "Попросить номер", "code": "player_interaction.cpp: attrib == 14"},

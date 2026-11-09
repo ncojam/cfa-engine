@@ -479,3 +479,20 @@ body:not(.tab-dialogs) #sidebar,body:not(.tab-dialogs) #issuesBadge,body:not(.ta
 .np-icon-btn.on{border-color:var(--accent)}
 .np-code pre,.np-file{background:#0e1014;border:1px solid var(--line);border-radius:6px;padding:8px;font-family:var(--mono);font-size:11px;white-space:pre-wrap;word-break:break-word;margin:2px 0 8px}
 .np-file{align-self:stretch;max-height:420px;overflow:auto}
+
+/* ---------------- персонажи */
+#people{height:100%}
+#people .gr{height:100%}
+.pe-rules summary{cursor:pointer;margin-bottom:6px}
+.pe-rules .gr-in.num{width:64px;font-family:var(--mono)}
+.pe-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.pe-name{font-size:16px}
+.pe-like{font-size:11px;border-radius:10px;padding:0 7px}
+.pe-fb{font-size:11px;color:var(--dim);margin-top:4px;border-left:2px solid var(--line2);padding-left:6px}
+.pe-love td,.pe-love th{vertical-align:middle}
+.pe-love select{background:var(--bg2);border:1px solid var(--line);border-radius:4px;padding:2px 4px;max-width:150px}
+.pe-crush{display:flex;flex-direction:column;gap:2px}
+.pe-flags{white-space:nowrap}
+.pe-flags label{margin-right:6px;cursor:pointer}
+.pe-off th,.pe-off td{opacity:.55}
+.pe-love .gr-in{width:100%}

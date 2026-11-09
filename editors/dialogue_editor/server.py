@@ -32,6 +32,7 @@ import dlgcore  # noqa: E402
 import stcore  # noqa: E402
 import grcore  # noqa: E402
 import incore  # noqa: E402
+import pecore  # noqa: E402
 
 PORTRAITS_DIR = os.path.normpath(os.path.join(HERE, '..', 'portraits'))
 sys.path.insert(0, PORTRAITS_DIR)
@@ -842,6 +843,68 @@ def api_npc_preview(body):
     return {"code": incore.generate(model), "slots": incore.slots(model["npc"]), "errors": incore.validate(model)}
 
 
+# ------------------------------------------------------------------ вкладка «Персонажи» (personality.h/.cpp)
+
+def _pe_paths():
+    src = os.path.join(CFG['project'], 'src')
+    return os.path.join(src, 'personality.h'), os.path.join(src, 'personality.cpp')
+
+
+def api_people_state():
+    hp, cp = _pe_paths()
+    if not (os.path.isfile(hp) and os.path.isfile(cp)):
+        return {"error": "нет %s / %s" % (hp, cp)}
+    names = _gr_names()
+    with open(hp, encoding='utf-8') as f:
+        h = f.read()
+    with open(cp, encoding='utf-8') as f:
+        c = f.read()
+    model = pecore.parse(h, c, len(names))
+    pers = read_text(os.path.join(CFG['project'], 'src', 'persons.cpp'))[0]
+    likes = [[int(x) for x in v.split(',')] for _, v in re.findall(r'\{\s*"([^"]+)",\s*\{([\d,\s]+)\}', pers)]
+    groups = {"names": [], "of": []}
+    gh, gc = _gr_paths()
+    if os.path.isfile(gh) and os.path.isfile(gc):
+        gm = grcore.parse(open(gh, encoding='utf-8').read(), open(gc, encoding='utf-8').read())
+        groups = {"names": [g["name"] for g in gm["groups"]], "of": gm["members"]}
+    dlg = read_text(CFG['cpp'])[0]
+    return {"model": model, "names": names, "likes": likes, "groups": groups,
+            "topics": grcore.parse_subjects(dlg)[:9], "askTopics": pecore.ASK_TOPICS, "tiers": pecore.TIERS,
+            "genders": pecore.GENDERS, "orient": pecore.ORIENT, "flags": [list(f) for f in pecore.FLAGS],
+            "textMax": pecore.TEXT_MAX, "hash": _gr_hash_of(_pe_paths()), "files": list(_pe_paths())}
+
+
+def _gr_hash_of(paths):
+    hh = hashlib.sha1()
+    for p in paths:
+        if os.path.isfile(p):
+            with open(p, 'rb') as f:
+                hh.update(f.read())
+    return hh.hexdigest()
+
+
+def api_people_save(body):
+    if body.get('hash') != _gr_hash_of(_pe_paths()) and not body.get('force'):
+        return 409, {"error": "personality.h/.cpp изменились на диске после загрузки. Перечитайте или сохраните принудительно."}
+    model = body['model']
+    errs = pecore.validate(model)
+    if errs:
+        return 400, {"error": "; ".join(errs[:5])}
+    h, c = pecore.generate(model, _gr_names())
+    changed = False
+    stamp = time.strftime('%Y%m%d_%H%M%S')
+    for path, text in zip(_pe_paths(), (h, c)):
+        old = open(path, encoding='utf-8').read() if os.path.isfile(path) else None
+        if old != text:
+            if old is not None:
+                os.makedirs(os.path.join(HERE, 'backups'), exist_ok=True)
+                shutil.copy2(path, os.path.join(HERE, 'backups', '%s_%s' % (stamp, os.path.basename(path))))
+            with open(path, 'w', encoding='utf-8', newline='\n') as f:
+                f.write(text)
+            changed = True
+    return 200, dict(api_people_state(), ok=True, changed=changed)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = 'GBDialogueEditor/1.0'
 
@@ -893,6 +956,9 @@ class Handler(BaseHTTPRequestHandler):
                         return self._send(200, api_tiles_fg(q.get('tmx')))
                     if path == '/api/tiles/map':
                         return self._send(200, api_tiles_map(q.get('tmx')))
+            if path == '/api/people/state':
+                with LOCK:
+                    return self._send(200, api_people_state())
             if path == '/api/npc/state':
                 with LOCK:
                     return self._send(200, api_npc_state())
@@ -937,6 +1003,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, {"ok": True})
                 if path == '/api/portraits/convert':
                     return self._send(200, api_portraits_convert(body))
+                if path == '/api/people/save':
+                    code, res = api_people_save(body)
+                    return self._send(code, res)
                 if path == '/api/npc/save':
                     code, res = api_npc_save(body)
                     return self._send(code, res)

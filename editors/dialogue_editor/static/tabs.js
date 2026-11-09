@@ -21,6 +21,10 @@ const TAB_DEFS = {
     open() { openGroups(); },
     close() { $('#groups').hidden = true; },
   },
+  people: {
+    open() { openPeople(); },
+    close() { $('#people').hidden = true; },
+  },
   npc: {
     open() { openNpc(); },
     close() { $('#npc').hidden = true; },
