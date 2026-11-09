@@ -67,6 +67,16 @@ function grRenderRel() {
     h('div', { class: 'gr-card-k' }, 'G_',
       h('input', { class: 'gr-in key', value: g.key, disabled: i === 0, title: 'Имя в коде (enum Group): A-Z, 0-9, _',
         onchange: e => grRenameKey(i, e.target.value) })),
+    h('div', { class: 'gr-humor' },
+      h('label', { title: 'Как группа называется в игре (список «о ком шутим»): ASCII, до ' + GR.st.titleMax + ' символов' }, 'в игре ',
+        h('input', { class: 'gr-in', value: g.title || '', maxlength: GR.st.titleMax, oninput: e => { g.title = e.target.value; grTouch(); } })),
+      h('label', { title: 'Сколько юмора Вики (0..200, с бонусами) нужно, чтобы шутка зашла' }, '😄 порог ',
+        h('input', { class: 'gr-in num', type: 'number', min: 0, max: 250, value: g.humorNeed ?? 60, oninput: e => { g.humorNeed = parseInt(e.target.value, 10) || 0; grTouch(); } })),
+      h('label', { title: 'Ещё нужен стат Вики (нерды - Intellect, модные/скейтеры - Allure как «стиль»)' }, 'и стат ',
+        h('select', { onchange: e => { g.humorStat = +e.target.value; grRender(); } },
+          h('option', { value: -1, selected: (g.humorStat ?? -1) < 0 }, '—'),
+          GR.st.stats.map((sname, k) => h('option', { value: k, selected: g.humorStat === k }, sname)))),
+      (g.humorStat ?? -1) >= 0 ? h('label', null, '≈ ', h('input', { class: 'gr-in num', type: 'number', min: 0, max: 200, value: g.humorStatNeed ?? 0, oninput: e => { g.humorStatNeed = parseInt(e.target.value, 10) || 0; grTouch(); } })) : null),
     h('textarea', { class: 'gr-in desc', rows: 2, placeholder: i ? 'Кто это, чем живут, с кем не ладят…' : '', oninput: e => { g.desc = e.target.value; grTouch(); } }, g.desc)));
   return h('div', { class: 'gr-rel' },
     h('div', { class: 'gr-cards' }, cards, h('button', { class: 'btn small', onclick: grAddGroup }, '+ группа'),
@@ -135,7 +145,7 @@ function grDrawGraph() {
 function grAddGroup() {
   const keys = GR.m.groups.map(g => g.key);
   let k = 'NEW', n = 1; while (keys.includes(k)) k = 'NEW' + (++n);
-  GR.m.groups.push({ key: k, name: 'Новая группа', desc: '' });
+  GR.m.groups.push({ key: k, name: 'Новая группа', desc: '', title: 'New group', humorNeed: 60, humorStat: -1, humorStatNeed: 0 });
   GR.m.attitude.forEach(r => r.push(0));
   GR.m.attitude.push(GR.m.groups.map(() => 0));
   grRender();
@@ -190,9 +200,12 @@ function grRenderMembers() {
 function grRenderPhrases() {
   const G = GR.m.groups, sits = GR.st.situations, sit = sits.find(s => s.key === GR.sit) || sits[0];
   const g = G[GR.phG] || G[0];
-  const levels = GR.st.levels, subjects = GR.st.subjects, defs = (GR.st.defaults[sit.key] || {});
+  // у шуток свои «темы» (виды шуток) и подписи исходов; у разговоров - темы listSubjects
+  const levels = GR.st.levels, subjects = Array.isArray(sit.subjects) ? sit.subjects : GR.st.subjects, defs = (GR.st.defaults[sit.key] || {});
+  const lvlTxt = l => (sit.levelLabels && sit.levelLabels[l]) || GR_LVL_TXT[l] || l;
   const mine = (s, l) => GR.m.phrases.filter(p => p.group === g.key && p.situation === sit.key && p.subject === s && p.level === l);
-  const filled = subjects.reduce((n, _, s) => n + levels.filter(l => mine(s, l).length).length, 0);
+  const filled = subjects.reduce((n, nm, s) => n + (nm ? levels.filter(l => mine(s, l).length).length : 0), 0);
+  const cells = subjects.filter(Boolean).length * levels.length;
   const cell = (s, l) => {
     const li = levels.indexOf(l);
     const def = (defs[s] || []).map(e => e[li]).filter(Boolean);
@@ -219,10 +232,10 @@ function grRenderPhrases() {
         sits.map(s => h('option', { value: s.key, selected: s.key === sit.key }, `${s.label} (${s.where})`)))),
       h('label', null, ' Группа ', h('select', { onchange: e => { GR.phG = +e.target.value; store.set('gr.phG', GR.phG); grRender(); } },
         G.map((x, i) => h('option', { value: i, selected: i === GR.phG }, `${x.name || x.key} — ${GR.m.phrases.filter(p => p.group === x.key && p.situation === sit.key && p.text).length} фраз`)))),
-      h('span', { class: 'tl-hint' }, `своё есть в ${filled} из ${subjects.length * levels.length} клеток; пустая клетка — игра скажет общую фразу (раскрыть «общие»). «Всё равно» (2) — всегда «I don't really care».`)),
+      h('span', { class: 'tl-hint' }, `своё есть в ${filled} из ${cells} клеток; пустая клетка — игра скажет общую фразу (раскрыть «общие»). «Всё равно» (2) — всегда «I don't really care».`)),
     h('table', { class: 'gr-phr' },
-      h('tr', null, h('th', null, 'тема \\ отношение персонажа к теме'), levels.map(l => h('th', null, GR_LVL_TXT[l] || l))),
-      subjects.map((name, s) => h('tr', null, h('th', null, h('span', { class: 'gr-cid' }, s), ' ', name), levels.map(l => cell(s, l))))));
+      h('tr', null, h('th', null, Array.isArray(sit.subjects) ? 'вид \\ исход' : 'тема \\ отношение персонажа к теме'), levels.map(l => h('th', null, lvlTxt(l)))),
+      subjects.map((name, s) => name ? h('tr', null, h('th', null, h('span', { class: 'gr-cid' }, s), ' ', name), levels.map(l => cell(s, l))) : null)));
 }
 
 // ------------------------------------------------------------ сохранение

@@ -15,11 +15,19 @@ KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 # Ситуации, которые уже подключены в коде игры (player_interaction.cpp). Новую ситуацию
 # добавляют здесь + вызов Groups::phrase() в нужном месте игры.
 SITUATIONS = [
-    {"key": "TALK", "label": "Разговор на тему", "where": "TALK → SUBJECT", "subjects": True, "levels": True,
+    {"key": "TALK", "label": "Разговор на тему", "where": "TALK → SUBJECT", "subjects": "topics", "levels": True,
      "defaults": "rTalkPointers"},
-    {"key": "CRITICIZE", "label": "Критика темы", "where": "TALK → CRITICIZE", "subjects": True, "levels": True,
+    {"key": "CRITICIZE", "label": "Критика темы", "where": "TALK → CRITICIZE", "subjects": "topics", "levels": True,
      "defaults": "rCritisizePointers"},
+    # subject = Jokes::Type, level = Jokes::Outcome (jokes.h); общие фразы - jokeLines в jokes.cpp
+    {"key": "JOKE", "label": "Шутка", "where": "TALK → JOKE", "levels": True, "defaults": "jokeLines",
+     "subjects": ["Подколоть", "О себе", "О ком-то (группа)", "Смешной танец"],
+     "levelLabels": {"0": "😬 провал", "1": "😐 так себе", "3": "😄 смешно", "4": "🤣 очень смешно"}},
 ]
+
+# Статы Вики (_stats[], player_stats_wardrobe.h) - для юмор-профиля групп
+STATS = ["Kindness", "Humor", "Charisma", "Allure", "SelfEsteem", "Intellect", "Sanity", "Behaviour"]
+TITLE_MAX = 14            # listSubjects-строка в игре (char[15])
 
 
 def c_str(s):
@@ -53,11 +61,19 @@ def parse(h_text, cpp_text):
     groups = []
     for m in re.finditer(r"^\s*G_(\w+)\s*(?:=\s*0\s*)?,\s*//\s*(.*)$", _block(h_text, r"enum\s+Group\s*\{"), re.M):
         if m.group(1) != "COUNT":
-            groups.append({"key": m.group(1), "name": "", "desc": ""})
+            groups.append({"key": m.group(1), "name": "", "desc": "", "title": m.group(1).title(),
+                           "humorNeed": 60, "humorStat": -1, "humorStatNeed": 0})
     info = _block(cpp_text, r"const\s+GroupInfo\s+info\s*\[[^\]]*\]\s*=\s*\{")
-    for k, m in enumerate(re.finditer(r"\{\s*" + STR_RE + r"\s*,\s*" + STR_RE + r"\s*\}", info)):
+    # { "name", "desc" [, "title", humorNeed, humorStat, humorStatNeed] }
+    rx = (r"\{\s*" + STR_RE + r"\s*,\s*" + STR_RE +
+          r"(?:\s*,\s*" + STR_RE + r"\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+))?\s*\}")
+    for k, m in enumerate(re.finditer(rx, info)):
         if k < len(groups):
-            groups[k]["name"], groups[k]["desc"] = c_unstr(m.group(1)), c_unstr(m.group(2))
+            g = groups[k]
+            g["name"], g["desc"] = c_unstr(m.group(1)), c_unstr(m.group(2))
+            if m.group(3) is not None:
+                g["title"] = c_unstr(m.group(3))
+                g["humorNeed"], g["humorStat"], g["humorStatNeed"] = int(m.group(4)), int(m.group(5)), int(m.group(6))
     keys = [g["key"] for g in groups]
     members = [keys.index(m.group(1)) if m.group(1) in keys else 0
                for m in re.finditer(r"\bG_(\w+)\s*,", _block(cpp_text, r"members\s*\[[^\]]*\]\s*=\s*\{"))]
@@ -86,6 +102,12 @@ def validate(model):
             errs.append("ключ группы %r: только A-Z, 0-9, _ и с буквы" % k)
     if len(set(keys)) != len(keys):
         errs.append("ключи групп повторяются")
+    for g in model["groups"]:
+        t = g.get("title") or ""
+        if not t or len(t) > TITLE_MAX or any(ord(c) > 126 or ord(c) < 32 for c in t):
+            errs.append("название группы %s в игре: 1..%d символов, только ASCII" % (g["key"], TITLE_MAX))
+        if not (0 <= int(g.get("humorNeed", 0)) <= 250) or not (-1 <= int(g.get("humorStat", -1)) < len(STATS)):
+            errs.append("юмор группы %s: порог 0..250, стат -1..%d" % (g["key"], len(STATS) - 1))
     for p in model["phrases"]:
         t = p["text"]
         if len(t) > TEXT_MAX:
@@ -114,7 +136,10 @@ def generate(model, char_names):
     for k, s in enumerate(SITUATIONS):
         H.append("\t%-24s// %s (%s)" % ("SIT_%s%s," % (s["key"], " = 0" if k == 0 else ""), s["label"], s["where"]))
     H += ["\tSIT_COUNT", "};", "",
-          "struct GroupInfo { const char *name; const char *desc; };",
+          "// name/desc - для редактора; title - как группа называется в игре (список «о ком шутим»).",
+          "// Юмор: шутка заходит, если юмор Вики (+ бонусы, см. jokes.cpp) >= humorNeed;",
+          "// humorStat >= 0 - ещё нужен этот стат Вики (_stats[], 3 Allure = стиль, 5 Intellect) около humorStatNeed.",
+          "struct GroupInfo { const char *name; const char *desc; const char *title; short humorNeed; signed char humorStat; short humorStatNeed; };",
           "// subject - номер темы (listSubjects), level - subjectLikes персонажа (0,1,3,4)",
           "struct Phrase { unsigned char group, situation, subject, level; const char *text; };", "",
           "extern const GroupInfo info[ G_COUNT ];", "",
@@ -129,7 +154,9 @@ def generate(model, char_names):
          "namespace Groups", "{", "",
          "const GroupInfo info[ G_COUNT ] = {"]
     for g in groups:
-        C.append("\t/* %-*s */ { %s, %s }," % (w, g["key"], c_str(g["name"]), c_str(g["desc"])))
+        C.append("\t/* %-*s */ { %s, %s, %s, %d, %d, %d }," % (
+            w, g["key"], c_str(g["name"]), c_str(g["desc"]), c_str(g.get("title") or g["key"].title()),
+            int(g.get("humorNeed", 60)), int(g.get("humorStat", -1)), int(g.get("humorStatNeed", 0))))
     C += ["};", "", "// Кто в какой группе: индекс = charID", "static const unsigned char members[ CHAR_COUNT ] = {"]
     total = max(len(members), len(char_names), 40)
     for cid in range(total):
@@ -187,7 +214,29 @@ def parse_subjects(dialogues_cpp):
     if not m:
         return []
     body = re.sub(r"//[^\n]*", "", m.group(1))
-    return [c_unstr(s) for s in re.findall(STR_RE, body)]
+    out = [c_unstr(s) for s in re.findall(STR_RE, body)]
+    return out
+
+
+def parse_joke_defaults(jokes_cpp):
+    """jokeLines[ Jokes::COUNT ][ 2 ] из jokes.cpp -> {type: [[fail, meh, laugh, big], ...]}"""
+    try:
+        body = _block(jokes_cpp, r"jokeLines\s*\[[^\]]*\]\s*\[[^\]]*\]\s*=\s*\{")
+    except ValueError:
+        return {}
+    body = re.sub(r"//[^\n]*", "", body)
+    out, depth, start, k = {}, 0, None, 0
+    for i, ch in enumerate(body):     # верхний уровень: по блоку на тип шутки
+        if ch == "{":
+            depth += 1
+            if depth == 1:
+                start = i
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                out[k] = [[c_unstr(x) for x in re.findall(STR_RE, e)] for e in re.findall(r"\{([^{}]*)\}", body[start + 1:i])]
+                k += 1
+    return out
 
 
 def parse_defaults(dialogues_cpp):

@@ -31,6 +31,7 @@ sys.path.insert(0, HERE)
 import dlgcore  # noqa: E402
 import stcore  # noqa: E402
 import grcore  # noqa: E402
+import incore  # noqa: E402
 
 PORTRAITS_DIR = os.path.normpath(os.path.join(HERE, '..', 'portraits'))
 sys.path.insert(0, PORTRAITS_DIR)
@@ -753,8 +754,13 @@ def api_groups_state():
         c = f.read()
     model = grcore.parse(h, c)
     dlg = read_text(CFG['cpp'])[0]
+    defaults = grcore.parse_defaults(dlg)
+    jp = os.path.join(CFG['project'], 'src', 'jokes.cpp')
+    if os.path.isfile(jp):
+        defaults['JOKE'] = grcore.parse_joke_defaults(read_text(jp)[0])
     return {"model": model, "situations": grcore.SITUATIONS, "levels": grcore.LEVELS, "textMax": grcore.TEXT_MAX,
-            "subjects": grcore.parse_subjects(dlg)[:9], "defaults": grcore.parse_defaults(dlg),
+            "stats": grcore.STATS, "titleMax": grcore.TITLE_MAX,
+            "subjects": grcore.parse_subjects(dlg)[:9], "defaults": defaults,
             "names": _gr_names(), "hash": _gr_hash(), "files": [hp, cp]}
 
 
@@ -778,6 +784,62 @@ def api_groups_save(body):
                 f.write(text)
             changed = True
     return 200, dict(api_groups_state(), ok=True, changed=changed)
+
+
+# ------------------------------------------------------------------ вкладка «NPC» (колесо взаимодействий)
+
+def _npc_path():
+    return os.path.join(CFG['project'], 'src', 'interactions.cpp')
+
+
+ICON_CACHE = {}
+
+
+def api_npc_state():
+    p = _npc_path()
+    if not os.path.isfile(p):
+        return {"error": "нет %s" % p}
+    with open(p, encoding='utf-8') as f:
+        text = f.read()
+    model = incore.parse(text)
+    icons = None
+    sheet = os.path.join(CFG['project'], 'images', 'mss-01.bmp')
+    if os.path.isfile(sheet):
+        key = (sheet, os.path.getmtime(sheet))
+        if key not in ICON_CACHE:
+            ICON_CACHE.clear()
+            ICON_CACHE[key] = incore.icon_sheet(sheet)
+        icons = ICON_CACHE[key]
+    dlg = read_text(CFG['cpp'])[0]
+    m = re.search(r"listSubjects\s*\[[^\]]*\]\s*\[[^\]]*\]\s*=\s*\{(.*?)\};", dlg, re.S)
+    subjects = [grcore.c_unstr(x) for x in re.findall(grcore.STR_RE, re.sub(r"//[^\n]*", "", m.group(1)))] if m else []
+    return {"model": model, "handlers": [dict(does=k[0], attr=k[1], **v) for k, v in incore.HANDLERS.items()],
+            "slots": incore.slots(model["npc"]), "icons": icons, "subjects": subjects,
+            "nameMax": incore.NAME_MAX, "hash": _file_hash(p), "file": p, "code": text}
+
+
+def api_npc_save(body):
+    p = _npc_path()
+    if body.get('hash') != _file_hash(p) and not body.get('force'):
+        return 409, {"error": "interactions.cpp изменился на диске после загрузки. Перечитайте или сохраните принудительно."}
+    model = body['model']
+    errs = incore.validate(model)
+    if errs:
+        return 400, {"error": "; ".join(errs[:5])}
+    text = incore.generate(model)
+    with open(p, encoding='utf-8') as f:
+        old = f.read()
+    if text != old:
+        os.makedirs(os.path.join(HERE, 'backups'), exist_ok=True)
+        shutil.copy2(p, os.path.join(HERE, 'backups', '%s_interactions.cpp' % time.strftime('%Y%m%d_%H%M%S')))
+        with open(p, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(text)
+    return 200, dict(api_npc_state(), ok=True, changed=text != old)
+
+
+def api_npc_preview(body):
+    model = body['model']
+    return {"code": incore.generate(model), "slots": incore.slots(model["npc"]), "errors": incore.validate(model)}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -831,6 +893,9 @@ class Handler(BaseHTTPRequestHandler):
                         return self._send(200, api_tiles_fg(q.get('tmx')))
                     if path == '/api/tiles/map':
                         return self._send(200, api_tiles_map(q.get('tmx')))
+            if path == '/api/npc/state':
+                with LOCK:
+                    return self._send(200, api_npc_state())
             if path == '/api/groups/state':
                 with LOCK:
                     return self._send(200, api_groups_state())
@@ -872,6 +937,11 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, {"ok": True})
                 if path == '/api/portraits/convert':
                     return self._send(200, api_portraits_convert(body))
+                if path == '/api/npc/save':
+                    code, res = api_npc_save(body)
+                    return self._send(code, res)
+                if path == '/api/npc/preview':
+                    return self._send(200, api_npc_preview(body))
                 if path == '/api/groups/save':
                     code, res = api_groups_save(body)
                     return self._send(code, res)

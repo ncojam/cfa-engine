@@ -22,12 +22,7 @@ const TAB_DEFS = {
     close() { $('#groups').hidden = true; },
   },
   npc: {
-    open() {
-      const root = $('#npc'); root.hidden = false; root.innerHTML = '';
-      root.append(h('div', { class: 'empty' },
-        h('div', { class: 'empty-title' }, '🧑 Взаимодействия с NPC'),
-        h('div', { class: 'empty-sub' }, 'Следующая вкладка: здесь будет редактор взаимодействий с NPC. Пока пусто.')));
-    },
+    open() { openNpc(); },
     close() { $('#npc').hidden = true; },
   },
 };
