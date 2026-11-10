@@ -1,0 +1,21 @@
+# Редакторы (VS Code, Kate, CLion, Notepad++, VS) читают этот файл сами.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+
+[*.{cpp,h,c,hpp,inc}]
+# отступы в C++ смешанные (табы и 4 пробела) — не навязываем, только ширину таба
+tab_width = 4
+
+[*.{js,css,html,py,json,md}]
+indent_style = space
+indent_size = 2
+
+[*.py]
+indent_size = 4
+
+[*.{bat,ps1}]
+end_of_line = crlf

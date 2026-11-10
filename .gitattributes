@@ -1,0 +1,15 @@
+# Все текстовые файлы в репозитории — UTF-8 без BOM и LF.
+# Git сам приводит концы строк при коммите (на Windows можно держать CRLF в рабочей копии).
+* text=auto eol=lf
+*.sh  text eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+# бинарники — никогда не трогать
+*.png binary
+*.gba binary
+*.wav binary
+*.bmp binary
+*.psd binary
+*.kra binary
+*.ttf binary
+*.ico binary
