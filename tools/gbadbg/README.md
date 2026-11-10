@@ -35,6 +35,7 @@ cmake --build build -j(nproc)
 | Клавиши | Что делают |
 |---|---|
 | стрелки, X / Z, A / S, Enter, Backspace | GBA: крестовина, A / B, L / R, Start, Select (как в mGBA) |
+| F2 (или «My keys» в Timeline) | своя раскладка: WASD — крестовина, Q / E — L / R, ↑ — A, ← — B, правый Shift — Start, клавиша слева от него (`/` в US, `.` в RU) — Select. Запоминается в `~/.config/gbadbg/keys.txt` |
 | Space | пауза / продолжить |
 | `,` / `.` | кадр назад / вперёд (с Shift — по 10) |
 | Tab (держать) | ускорение |

@@ -6,6 +6,12 @@
 игры (`project/src/`, `project/images/`, `project/resources/`,
 `project/sounds/`) в репозиторий не входят, см. `.gitignore`.
 
+## Быстрый запуск
+
+* `./editor.sh` (Windows: `editor.bat`) — редактор диалогов и данных игры (`editors/dialogue_editor`),
+  откроет браузер; аргументы передаются как есть (`./editor.sh --no-browser --port 9000`).
+* `./gbadbg.sh` — пересобрать игру и запустить её в отладчике.
+
 ## Структура
 
 ```

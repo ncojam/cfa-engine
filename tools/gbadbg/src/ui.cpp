@@ -8,6 +8,10 @@
 #include "app.h"
 #include "imgui.h"
 
+// своя раскладка клавиш (main.cpp)
+extern bool g_customKeys;
+void saveKeysMode();
+
 namespace gbadbg {
 
 static const double kFrameCycles = 280896.0;
@@ -96,6 +100,11 @@ static void timelineBar(App& a) {
 
 void timelineWindow(App& a, uint32_t liveKeys) {
 	ImGui::Begin("Timeline");
+	if (ImGui::Checkbox("My keys (F2)", &g_customKeys)) saveKeysMode();
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip(g_customKeys
+		? "WASD - d-pad, Q = L, E = R, Up = A, Left = B, RShift = Start, '/' ('.' RU) = Select"
+		: "Arrows - d-pad, X = A, Z = B, A = L, S = R, Enter = Start, Backspace = Select");
+	ImGui::SameLine();
 	if (ImGui::Button(a.paused ? "Resume (Space)" : "Pause (Space)", ImVec2(130, 0))) { if (a.paused) a.resume(); else a.pause(); }
 	ImGui::SameLine(); if (ImGui::Button("|<")) { a.pause(); a.seek(a.hist.first()); }
 	ImGui::SameLine(); if (ImGui::Button("-10")) a.step(-10, liveKeys);

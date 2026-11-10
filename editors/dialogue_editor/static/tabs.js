@@ -26,6 +26,9 @@ function setTab(name) {
   const prev = TABS.cur;
   TABS.cur = name;   // до close/open: renderEditor() смотрит на TABS.cur
   if (prev) TAB_DEFS[prev].close();
+  // заглушка «Выберите диалог» видна в разметке с самого начала: если редактор открылся
+  // сразу на другой вкладке (запомненной), её никто не прятал — прячем явно.
+  if (name !== 'dialogs') TAB_DEFS.dialogs.close();
   for (const t of Object.keys(TAB_DEFS)) document.body.classList.toggle('tab-' + t, t === name);
   $$('#tabs .tab').forEach(b => b.classList.toggle('on', b.dataset.tab === name));
   store.set('tab', name);

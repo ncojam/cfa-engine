@@ -4,6 +4,8 @@
 //                         [--save graveblood.sav] [--history-mb 1024]
 //
 // Управление игрой (как в mGBA): стрелки, X = A, Z = B, A = L, S = R, Enter = Start, Backspace = Select.
+// Своя раскладка (F2 или галочка в Timeline): WASD, Q = L, E = R, ↑ = A, ← = B,
+//          правый Shift = Start, клавиша слева от него ('/' в US, '.' в RU) = Select.
 // Отладка: Space - пауза/продолжить, ',' / '.' - кадр назад/вперёд (Shift - по 10),
 //          Tab (держать) - ускорение, M - пометить кадр как плохой.
 #include <SDL.h>
@@ -24,9 +26,36 @@
 using namespace gbadbg;
 namespace fs = std::filesystem;
 
+bool g_customKeys = false;   // своя раскладка (запоминается в ~/.config/gbadbg/keys.txt)
+
+static std::string configPath();
+static std::string keysPath() {
+	std::string p = configPath();
+	return p.substr(0, p.find_last_of('/') + 1) + "keys.txt";
+}
+static void loadKeysMode() {
+	if (FILE* f = fopen(keysPath().c_str(), "r")) { int v = 0; if (fscanf(f, "%d", &v) == 1) g_customKeys = v != 0; fclose(f); }
+}
+void saveKeysMode() {
+	if (FILE* f = fopen(keysPath().c_str(), "w")) { fprintf(f, "%d\n", g_customKeys ? 1 : 0); fclose(f); }
+}
+
 static uint32_t readGbaKeys() {
 	const Uint8* k = SDL_GetKeyboardState(nullptr);
 	uint32_t m = 0;
+	if (g_customKeys) {
+		if (k[SDL_SCANCODE_UP]) m |= KEY_A;
+		if (k[SDL_SCANCODE_LEFT]) m |= KEY_B;
+		if (k[SDL_SCANCODE_Q]) m |= KEY_L;
+		if (k[SDL_SCANCODE_E]) m |= KEY_R;
+		if (k[SDL_SCANCODE_RSHIFT]) m |= KEY_START;
+		if (k[SDL_SCANCODE_SLASH]) m |= KEY_SELECT;   // физическая клавиша слева от правого Shift
+		if (k[SDL_SCANCODE_W]) m |= KEY_UP;
+		if (k[SDL_SCANCODE_S]) m |= KEY_DOWN;
+		if (k[SDL_SCANCODE_A]) m |= KEY_LEFT;
+		if (k[SDL_SCANCODE_D]) m |= KEY_RIGHT;
+		return m;
+	}
 	if (k[SDL_SCANCODE_X]) m |= KEY_A;
 	if (k[SDL_SCANCODE_Z]) m |= KEY_B;
 	if (k[SDL_SCANCODE_A]) m |= KEY_L;
@@ -126,6 +155,7 @@ int main(int argc, char** argv) {
 	ImGuiIO& io = ImGui::GetIO();
 	io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 	static std::string ini = configPath();
+	loadKeysMode();
 	io.IniFilename = ini.c_str();
 	ImGui::StyleColorsDark();
 	ImGui_ImplSDL2_InitForOpenGL(win, gl);
@@ -169,9 +199,13 @@ int main(int argc, char** argv) {
 		bool fast = false;
 		if (!typing) {
 			const int stepN = io.KeyShift ? 10 : 1;
+			if (ImGui::IsKeyPressed(ImGuiKey_F2, false)) { g_customKeys = !g_customKeys; saveKeysMode(); }
 			if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) { if (app.paused) app.resume(); else app.pause(); }
-			if (ImGui::IsKeyPressed(ImGuiKey_Comma)) app.step(-stepN, keys);
-			if (ImGui::IsKeyPressed(ImGuiKey_Period)) app.step(stepN, keys);
+			// В своей раскладке Select — клавиша '/', в русской раскладке она даёт '.',
+			// и ImGui (он смотрит на символ, а не на клавишу) принял бы её за «кадр вперёд».
+			const bool selectKey = g_customKeys && SDL_GetKeyboardState(nullptr)[SDL_SCANCODE_SLASH];
+			if (!selectKey && ImGui::IsKeyPressed(ImGuiKey_Comma)) app.step(-stepN, keys);
+			if (!selectKey && ImGui::IsKeyPressed(ImGuiKey_Period)) app.step(stepN, keys);
 			if (ImGui::IsKeyPressed(ImGuiKey_M, false)) app.toggleMark();
 			fast = ImGui::IsKeyDown(ImGuiKey_Tab);
 		}
