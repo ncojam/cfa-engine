@@ -13,3 +13,4 @@
 *.kra binary
 *.ttf binary
 *.ico binary
+* text=auto eol=lf
