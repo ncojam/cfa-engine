@@ -2,29 +2,19 @@
 // Ask about: ответы персонажей по темам и ярусам (не хочет / неохотно / с удовольствием) + пороги тем.
 // Романтика: пол, ориентация, партнёр, влюблённости, флаги.
 
-const PE = { st: null, m: null, orig: '', sub: store.get('pe.sub', 'tpl'), who: store.get('pe.who', -1), filter: '', busy: false };
+const PE = dataTab({
+  id: 'people', root: '#people', what: 'правки персонажей', saved: 'personality.h / .cpp сохранены',
+  render: () => peRender(),
+  prepare: m => {
+    m.chars.forEach(c => { c.meals = c.meals.filter(x => x.trim()); c.dreams = c.dreams.filter(x => x.trim()); });
+    const bad = m.chars.flatMap(c => [c.music, ...c.meals, ...c.dreams]).concat(m.places).filter(t => peBadText(t, PE.st.itemMax));
+    return bad.length ? `Строк с ошибками: ${bad.length} (длина > ${PE.st.itemMax}, не-ASCII или «%») — исправьте` : m;
+  },
+}, { sub: store.get('pe.sub', 'tpl'), who: store.get('pe.who', -1), filter: '' });
 const PE_LIKE = { 0: '😠', 1: '🙁', 2: '😐', 3: '🙂', 4: '❤' };
-const peDirty = () => PE.m && JSON.stringify(PE.m) !== PE.orig;
+const peDirty = () => PE.dirty();
 const peName = c => (PE.st.names[c] || '?');
 const peGroup = c => PE.st.groups.names[PE.st.groups.of[c]] || '';
-
-async function openPeople() {
-  $('#people').hidden = false;
-  if (!PE.st) await peLoad(); else peRender();
-}
-
-async function peLoad() {
-  try {
-    const st = await api('/api/people/state');
-    if (st.error) throw new Error(st.error);
-    peIngest(st);
-  } catch (e) {
-    const root = $('#people'); root.innerHTML = '';
-    root.append(h('div', { class: 'empty' }, h('div', { class: 'empty-title' }, 'Не удалось загрузить персонажей'), h('div', { class: 'empty-sub' }, e.message)));
-  }
-}
-
-function peIngest(st) { PE.st = st; PE.m = st.model; PE.orig = JSON.stringify(st.model); peRender(); }
 
 function peRender() {
   const root = $('#people'); root.innerHTML = '';
@@ -39,12 +29,11 @@ function peRender() {
       sub('meal', '🍩 Еда'), sub('dream', '✨ Мечты'),
       h('span', { class: 'pe-sep' }), sub('love', '💘 Романтика'),
       h('div', { class: 'spacer' }),
-      h('button', { class: 'btn', onclick: peReload }, '⟳ С диска'),
-      h('button', { class: 'btn primary' + (peDirty() ? ' dirty' : ''), disabled: !peDirty() || PE.busy, onclick: () => peSave(), title: 'Записать personality.h / .cpp (Ctrl+S)' }, 'Сохранить')),
+      ...PE.buttons()),
     h('div', { class: 'gr-body' }, body())));
 }
 
-function peTouch() { const b = $('#people .gr-bar .btn.primary'); if (b) { b.disabled = !peDirty(); b.classList.toggle('dirty', peDirty()); } }
+const peTouch = () => PE.touch();
 
 const peBadText = (v, max) => v.length > max || /[^\x20-\x7e]/.test(v) || v.includes('%');
 function peInput(get, set, { max, placeholder = '', wide = false, allowPct = false } = {}) {
@@ -200,32 +189,3 @@ function peRenderLove() {
       h('tr', null, ['персонаж', 'пол', 'ориентация', 'партнёр', 'влюблён(а) в', 'флаги', 'заметка'].map(t => h('th', null, t))),
       rows));
 }
-
-// ------------------------------------------------------------ сохранение
-async function peReload() {
-  if (peDirty() && !confirm('Есть несохранённые правки персонажей. Перечитать с диска и потерять их?')) return;
-  PE.st = null; await peLoad(); toast('Перечитано с диска');
-}
-
-async function peSave(force) {
-  if (!peDirty()) return;
-  const m = JSON.parse(JSON.stringify(PE.m));
-  m.chars.forEach(c => { c.meals = c.meals.filter(x => x.trim()); c.dreams = c.dreams.filter(x => x.trim()); });
-  const bad = m.chars.flatMap(c => [c.music, ...c.meals, ...c.dreams]).concat(m.places).filter(t => peBadText(t, PE.st.itemMax));
-  if (bad.length) { toast(`Строк с ошибками: ${bad.length} (длина > ${PE.st.itemMax}, не-ASCII или «%») — исправьте`, 'err'); return; }
-  PE.busy = true;
-  try {
-    const st = await api('/api/people/save', { hash: PE.st.hash, model: m, force: !!force });
-    peIngest(st);
-    toast(st.changed ? 'personality.h / .cpp сохранены' : 'Без изменений', 'ok');
-  } catch (e) {
-    if (e.status === 409 && confirm(e.message + '\n\nПерезаписать своими правками?')) { PE.busy = false; return peSave(true); }
-    toast('Не сохранено: ' + e.message, 'err');
-  } finally { PE.busy = false; if (PE.m) peRender(); }
-}
-
-addEventListener('keydown', e => {
-  if (typeof TABS === 'undefined' || TABS.cur !== 'people') return;
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); peSave(); }
-});
-addEventListener('beforeunload', e => { if (peDirty()) { e.preventDefault(); e.returnValue = ''; } });

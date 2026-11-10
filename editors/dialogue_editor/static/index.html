@@ -17,6 +17,8 @@
     <button class="tab" data-tab="groups" title="Группы персонажей: отношения между группами, состав, фразы групп">👥 Группы</button>
     <button class="tab" data-tab="people" title="Персонажи: ответы на Ask about, романтические профили">🧑‍🤝‍🧑 Персонажи</button>
     <button class="tab" data-tab="npc" title="Колесо взаимодействий с NPC: пункты, иконки, блокировка">🎛 NPC</button>
+    <button class="tab" data-tab="missions" title="Порядок прохождения миссий (mission_order.cpp)">🗺 Миссии</button>
+    <button class="tab" data-tab="light" title="Свет в помещениях и транспорте по времени суток (light_profiles.cpp)">💡 Свет</button>
   </nav>
   <div id="crumbs" class="dlg-only"></div>
   <div class="spacer"></div>
@@ -59,6 +61,8 @@
     <div id="groups" hidden></div>
     <div id="people" hidden></div>
     <div id="npc" hidden></div>
+    <div id="missions" hidden></div>
+    <div id="light" hidden></div>
   </main>
 </div>
 
@@ -68,11 +72,14 @@
 
 <script src="/static/gba.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/datatab.js"></script>
 <script src="/static/portraits.js"></script>
 <script src="/static/tiles.js"></script>
 <script src="/static/groups.js"></script>
 <script src="/static/npc.js"></script>
 <script src="/static/people.js"></script>
+<script src="/static/missions.js"></script>
+<script src="/static/light.js"></script>
 <script src="/static/tabs.js"></script>
 </body>
 </html>

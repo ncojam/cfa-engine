@@ -2,40 +2,25 @@
 // Три подвкладки: группы и отношения между ними (граф + матрица), состав (перетаскивание
 // персонажей), фразы групп по ситуациям. Модель целиком уходит на сервер, тот генерирует оба файла.
 
-const GR = {
-  st: null, m: null, orig: '', sub: store.get('gr.sub', 'rel'), sit: 'TALK', phG: store.get('gr.phG', 1),
-  pick: null, filter: '', busy: false, drag: null,
-};
+const GR = dataTab({
+  id: 'groups', root: '#groups', what: 'правки групп', saved: 'groups.h / groups.cpp сохранены',
+  render: () => grRender(),
+  ingest: () => { if (GR.phG >= GR.m.groups.length) GR.phG = Math.min(1, GR.m.groups.length - 1); },
+  prepare: m => {
+    m.phrases = m.phrases.filter(p => p.text.trim());
+    const bad = m.phrases.filter(p => p.text.length > GR.st.textMax || /[^\x20-\x7e]/.test(p.text));
+    return bad.length ? `Фраз с ошибками: ${bad.length} (длина > ${GR.st.textMax} или не-ASCII) — исправьте` : m;
+  },
+  onKey: e => { if (e.key === 'Escape' && GR.pick != null) { GR.pick = null; grRender(); } },
+}, { sub: store.get('gr.sub', 'rel'), sit: 'TALK', phG: store.get('gr.phG', 1), pick: null, filter: '', drag: null });
 const GR_ATT = [-2, -1, 0, 1, 2];
 const GR_ATT_TXT = { '-2': 'вместе не придут', '-1': 'недолюбливают', '0': 'всё равно', '1': 'дружат', '2': 'очень дружат' };
 const GR_LVL_TXT = { 0: '😠 ненавидит', 1: '🙁 не любит', 3: '🙂 нравится', 4: '😍 обожает' };
 
-const grDirty = () => GR.m && JSON.stringify(GR.m) !== GR.orig;
+const grDirty = () => GR.dirty();
 const grColor = i => i === 0 ? '#6b7280' : `hsl(${(i * 67 + 10) % 360} 62% 58%)`;
 const grName = cid => (GR.st.names && GR.st.names[cid]) || charName(cid);
 const grCount = gi => GR.m.members.filter(x => x === gi).length;
-
-async function openGroups() {
-  $('#groups').hidden = false;
-  if (!GR.st) await grLoad(); else grRender();
-}
-
-async function grLoad() {
-  try {
-    const st = await api('/api/groups/state');
-    if (st.error) throw new Error(st.error);
-    grIngest(st);
-  } catch (e) {
-    const root = $('#groups'); root.innerHTML = '';
-    root.append(h('div', { class: 'empty' }, h('div', { class: 'empty-title' }, 'Не удалось загрузить группы'), h('div', { class: 'empty-sub' }, e.message)));
-  }
-}
-
-function grIngest(st) {
-  GR.st = st; GR.m = st.model; GR.orig = JSON.stringify(st.model);
-  if (GR.phG >= GR.m.groups.length) GR.phG = Math.min(1, GR.m.groups.length - 1);
-  grRender();
-}
 
 function grRender() {
   const root = $('#groups'); root.innerHTML = '';
@@ -46,14 +31,11 @@ function grRender() {
       sub('rel', '🕸 Группы и отношения'), sub('mem', '🧑‍🤝‍🧑 Состав'), sub('phr', '💬 Фразы'),
       h('div', { class: 'spacer' }),
       h('span', { class: 'tl-hint' }, GR.st.files[0].replace(/.*[\\/]src[\\/]/, 'src/') + ', groups.cpp'),
-      h('button', { class: 'btn', onclick: grReload }, '⟳ С диска'),
-      h('button', { class: 'btn primary' + (grDirty() ? ' dirty' : ''), disabled: !grDirty() || GR.busy, onclick: () => grSave(), title: 'Записать groups.h / groups.cpp (Ctrl+S)' }, 'Сохранить')),
+      ...GR.buttons()),
     h('div', { class: 'gr-body' }, GR.sub === 'mem' ? grRenderMembers() : GR.sub === 'phr' ? grRenderPhrases() : grRenderRel())));
 }
 
-function grTouch() {   // правка без пересборки (чтобы не терять фокус в полях)
-  const b = $('.gr-bar .btn.primary'); if (b) { b.disabled = !grDirty(); b.classList.toggle('dirty', grDirty()); }
-}
+const grTouch = () => GR.touch();   // правка без пересборки (чтобы не терять фокус в полях)
 
 // ------------------------------------------------------------ группы и отношения
 function grRenderRel() {
@@ -253,38 +235,8 @@ function grRenderPhrases() {
       subjects.map((name, s) => name ? h('tr', null, h('th', null, h('span', { class: 'gr-cid' }, s), ' ', name), levels.map(l => cell(s, l))) : null)));
 }
 
-// ------------------------------------------------------------ сохранение
-async function grReload() {
-  if (grDirty() && !confirm('Есть несохранённые правки групп. Перечитать с диска и потерять их?')) return;
-  GR.st = null; await grLoad(); toast('Перечитано с диска');
-}
-
-async function grSave(force) {
-  if (!grDirty()) return;
-  const m = JSON.parse(JSON.stringify(GR.m));
-  m.phrases = m.phrases.filter(p => p.text.trim());
-  const bad = m.phrases.filter(p => p.text.length > GR.st.textMax || /[^\x20-\x7e]/.test(p.text));
-  if (bad.length) { toast(`Фраз с ошибками: ${bad.length} (длина > ${GR.st.textMax} или не-ASCII) — исправьте`, 'err'); return; }
-  GR.busy = true;
-  try {
-    const st = await api('/api/groups/save', { hash: GR.st.hash, model: m, force: !!force });
-    grIngest(st);
-    toast(st.changed ? 'groups.h / groups.cpp сохранены' : 'Без изменений', 'ok');
-  } catch (e) {
-    if (e.status === 409 && confirm(e.message + '\n\nПерезаписать своими правками?')) { GR.busy = false; return grSave(true); }
-    toast('Не сохранено: ' + e.message, 'err');
-  } finally { GR.busy = false; if (GR.m) grRender(); }
-}
-
 { // граф рисуется после того, как SVG попал в DOM
   const _r = grRender;
   // eslint-disable-next-line no-func-assign
   grRender = function () { _r(); if (GR.sub === 'rel') grDrawGraph(); };
 }
-
-addEventListener('keydown', e => {
-  if (typeof TABS === 'undefined' || TABS.cur !== 'groups') return;
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); grSave(); }
-  else if (e.key === 'Escape' && GR.pick != null) { GR.pick = null; grRender(); }
-});
-addEventListener('beforeunload', e => { if (grDirty()) { e.preventDefault(); e.returnValue = ''; } });

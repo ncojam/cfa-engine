@@ -2,33 +2,14 @@
 // Уровень колеса = 4 записи подряд (↑ → ↓ ←). Корень - записи 0..3; подменю (does 0) указывает attr
 // на первую из своих четырёх. Сервер генерирует файл целиком (incore.py).
 
-const NP = { st: null, m: null, orig: '', lvl: 0, sel: 0, trail: [], code: false, busy: false, iconImg: null, iconUrl: {}, pick: false };
+const NP = dataTab({
+  id: 'npc', root: '#npc', what: 'правки колеса', saved: 'interactions.cpp сохранён',
+  render: () => npRender(),
+  ingest: () => { NP.iconImg = null; NP.iconUrl = {}; if (NP.sel >= NP.m.npc.length) NP.sel = 0; },
+}, { lvl: 0, sel: 0, trail: [], code: false, iconImg: null, iconUrl: {}, pick: false });
 const NP_DIRS = ['↑', '→', '↓', '←'];
 const NP_DOES = { 0: 'подменю', 1: 'список', 2: 'действие' };
-const npDirty = () => NP.m && JSON.stringify(NP.m) !== NP.orig;
-
-async function openNpc() {
-  $('#npc').hidden = false;
-  if (!NP.st) await npLoad(); else npRender();
-}
-
-async function npLoad() {
-  try {
-    const st = await api('/api/npc/state');
-    if (st.error) throw new Error(st.error);
-    npIngest(st);
-  } catch (e) {
-    const root = $('#npc'); root.innerHTML = '';
-    root.append(h('div', { class: 'empty' }, h('div', { class: 'empty-title' }, 'Не удалось загрузить колесо'), h('div', { class: 'empty-sub' }, e.message)));
-  }
-}
-
-function npIngest(st) {
-  NP.st = st; NP.m = st.model; NP.orig = JSON.stringify(st.model);
-  NP.iconImg = null; NP.iconUrl = {};
-  if (NP.sel >= NP.m.npc.length) NP.sel = 0;
-  npRender();
-}
+const npDirty = () => NP.dirty();
 
 // ---- иконки: 16x16 из листа спрайтов (тайл 512 + n), n чётное, ряды иконок через один ряд тайлов
 function npIcon(n) {
@@ -101,8 +82,7 @@ function npRender() {
       h('span', { class: 'tl-hint' }, `${npc.length} записей · ${locked} заблокировано · src/interactions.cpp`),
       h('div', { class: 'spacer' }),
       h('button', { class: 'chip' + (NP.code ? ' on' : ''), onclick: () => { NP.code = !NP.code; npRender(); } }, '</> весь файл'),
-      h('button', { class: 'btn', onclick: npReload }, '⟳ С диска'),
-      h('button', { class: 'btn primary' + (npDirty() ? ' dirty' : ''), disabled: !npDirty() || NP.busy, onclick: () => npSave(), title: 'Записать interactions.cpp (Ctrl+S)' }, 'Сохранить')),
+      ...NP.buttons()),
     h('div', { class: 'np-body' }, npRenderTree(), h('div', { class: 'np-center' }, npRenderWheel(), NP.code ? npRenderFile() : null), npRenderInspector())));
   if (NP.code) npPreview();
 }
@@ -233,7 +213,7 @@ function npRenderInspector() {
         : hd ? hd.code : `нет обработчика для does ${e.does}, attr ${e.attr}`)));
 }
 
-function npTouch() { const b = $('.np .gr-bar .btn.primary'); if (b) { b.disabled = !npDirty(); b.classList.toggle('dirty', npDirty()); } }
+const npTouch = () => NP.touch();
 
 function npNewSub(i) {
   const e = NP.m.npc[i], k = NP.m.npc.length;
@@ -250,27 +230,3 @@ function npPreview() {
     try { const r = await api('/api/npc/preview', { model: NP.m }); const el = $('#npFile'); if (el) el.textContent = (r.errors.length ? '// ОШИБКИ: ' + r.errors.join('; ') + '\n\n' : '') + r.code; } catch (e) { /* предпросмотр - не критично */ }
   }, 150);
 }
-
-async function npReload() {
-  if (npDirty() && !confirm('Есть несохранённые правки колеса. Перечитать с диска и потерять их?')) return;
-  NP.st = null; await npLoad(); toast('Перечитано с диска');
-}
-
-async function npSave(force) {
-  if (!npDirty()) return;
-  NP.busy = true;
-  try {
-    const st = await api('/api/npc/save', { hash: NP.st.hash, model: NP.m, force: !!force });
-    npIngest(st);
-    toast(st.changed ? 'interactions.cpp сохранён' : 'Без изменений', 'ok');
-  } catch (e) {
-    if (e.status === 409 && confirm(e.message + '\n\nПерезаписать своими правками?')) { NP.busy = false; return npSave(true); }
-    toast('Не сохранено: ' + e.message, 'err');
-  } finally { NP.busy = false; if (NP.m) npRender(); }
-}
-
-addEventListener('keydown', e => {
-  if (typeof TABS === 'undefined' || TABS.cur !== 'npc') return;
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); npSave(); }
-});
-addEventListener('beforeunload', e => { if (npDirty()) { e.preventDefault(); e.returnValue = ''; } });

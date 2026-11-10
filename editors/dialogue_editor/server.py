@@ -33,6 +33,8 @@ import stcore  # noqa: E402
 import grcore  # noqa: E402
 import incore  # noqa: E402
 import pecore  # noqa: E402
+import licore  # noqa: E402
+import mocore  # noqa: E402
 
 PORTRAITS_DIR = os.path.normpath(os.path.join(HERE, '..', 'portraits'))
 sys.path.insert(0, PORTRAITS_DIR)
@@ -105,6 +107,55 @@ def save_meta(meta):
     with open(tmp, 'w', encoding='utf-8') as fh:
         json.dump(meta, fh, ensure_ascii=False, indent=1, sort_keys=True)
     os.replace(tmp, meta_path())
+
+
+# ------------------------------------------------------------------ общие для вкладок «данные -> сгенерированный файл»
+#
+# Стандарт вкладки (groups / people / npc / light / missions):
+#   state()      -> {"model": ..., "hash": hash_files(paths), "files": paths, ...справочники}
+#   save(body)   -> save_generated(body, paths, label, validate, generate, state)
+# Регистрация — DATA_TABS внизу: маршруты /api/<tab>/state и /api/<tab>/save
+# появляются сами. Клиентская половина — static/datatab.js.
+
+def hash_files(paths):
+    hh = hashlib.sha1()
+    for p in paths:
+        if os.path.isfile(p):
+            with open(p, 'rb') as f:
+                hh.update(f.read())
+    return hh.hexdigest()
+
+
+def write_generated(paths, texts):
+    """Записать тексты (UTF-8, LF), если отличаются; старое — в backups/. -> было ли изменение."""
+    changed = False
+    stamp = time.strftime('%Y%m%d_%H%M%S')
+    for path, text in zip(paths, texts):
+        old = open(path, encoding='utf-8').read() if os.path.isfile(path) else None
+        if old == text:
+            continue
+        if old is not None:
+            os.makedirs(os.path.join(HERE, 'backups'), exist_ok=True)
+            shutil.copy2(path, os.path.join(HERE, 'backups', '%s_%s' % (stamp, os.path.basename(path))))
+        with open(path, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(text)
+        changed = True
+    return changed
+
+
+def save_generated(body, paths, label, validate, generate, state):
+    """Общий save: проверка hash (409), validate (400), generate -> тексты в том же порядке, что paths."""
+    if body.get('hash') != hash_files(paths) and not body.get('force'):
+        return 409, {"error": "%s изменились на диске после загрузки. Перечитайте или сохраните принудительно." % label}
+    model = body['model']
+    errs = validate(model)
+    if errs:
+        return 400, {"error": "; ".join(errs[:5])}
+    texts = generate(model)
+    if isinstance(texts, str):
+        texts = (texts,)
+    changed = write_generated(paths, texts)
+    return 200, dict(state(), ok=True, changed=changed)
 
 
 # ------------------------------------------------------------------ portraits
@@ -731,15 +782,6 @@ def _gr_paths():
     return os.path.join(src, 'groups.h'), os.path.join(src, 'groups.cpp')
 
 
-def _gr_hash():
-    hh = hashlib.sha1()
-    for p in _gr_paths():
-        if os.path.isfile(p):
-            with open(p, 'rb') as f:
-                hh.update(f.read())
-    return hh.hexdigest()
-
-
 def _gr_names():
     pers = os.path.join(CFG['project'], 'src', 'persons.cpp')
     return dlgcore.parse_characters(read_text(pers)[0]) if os.path.isfile(pers) else []
@@ -762,29 +804,12 @@ def api_groups_state():
     return {"model": model, "situations": grcore.SITUATIONS, "levels": grcore.LEVELS, "textMax": grcore.TEXT_MAX,
             "stats": grcore.STATS, "titleMax": grcore.TITLE_MAX,
             "subjects": grcore.parse_subjects(dlg)[:9], "defaults": defaults,
-            "names": _gr_names(), "hash": _gr_hash(), "files": [hp, cp]}
+            "names": _gr_names(), "hash": hash_files(_gr_paths()), "files": [hp, cp]}
 
 
 def api_groups_save(body):
-    if body.get('hash') != _gr_hash() and not body.get('force'):
-        return 409, {"error": "groups.h/.cpp изменились на диске после загрузки. Перечитайте или сохраните принудительно."}
-    model = body['model']
-    errs = grcore.validate(model)
-    if errs:
-        return 400, {"error": "; ".join(errs[:5])}
-    h, c = grcore.generate(model, _gr_names())
-    changed = False
-    stamp = time.strftime('%Y%m%d_%H%M%S')
-    for path, text in zip(_gr_paths(), (h, c)):
-        old = open(path, encoding='utf-8').read() if os.path.isfile(path) else None
-        if old != text:
-            if old is not None:
-                os.makedirs(os.path.join(HERE, 'backups'), exist_ok=True)
-                shutil.copy2(path, os.path.join(HERE, 'backups', '%s_%s' % (stamp, os.path.basename(path))))
-            with open(path, 'w', encoding='utf-8', newline='\n') as f:
-                f.write(text)
-            changed = True
-    return 200, dict(api_groups_state(), ok=True, changed=changed)
+    return save_generated(body, _gr_paths(), 'groups.h/.cpp', grcore.validate,
+                          lambda m: grcore.generate(m, _gr_names()), api_groups_state)
 
 
 # ------------------------------------------------------------------ вкладка «NPC» (колесо взаимодействий)
@@ -816,26 +841,11 @@ def api_npc_state():
     subjects = [grcore.c_unstr(x) for x in re.findall(grcore.STR_RE, re.sub(r"//[^\n]*", "", m.group(1)))] if m else []
     return {"model": model, "handlers": [dict(does=k[0], attr=k[1], **v) for k, v in incore.HANDLERS.items()],
             "slots": incore.slots(model["npc"]), "icons": icons, "subjects": subjects,
-            "nameMax": incore.NAME_MAX, "hash": _file_hash(p), "file": p, "code": text}
+            "nameMax": incore.NAME_MAX, "hash": hash_files([p]), "file": p, "files": [p], "code": text}
 
 
 def api_npc_save(body):
-    p = _npc_path()
-    if body.get('hash') != _file_hash(p) and not body.get('force'):
-        return 409, {"error": "interactions.cpp изменился на диске после загрузки. Перечитайте или сохраните принудительно."}
-    model = body['model']
-    errs = incore.validate(model)
-    if errs:
-        return 400, {"error": "; ".join(errs[:5])}
-    text = incore.generate(model)
-    with open(p, encoding='utf-8') as f:
-        old = f.read()
-    if text != old:
-        os.makedirs(os.path.join(HERE, 'backups'), exist_ok=True)
-        shutil.copy2(p, os.path.join(HERE, 'backups', '%s_interactions.cpp' % time.strftime('%Y%m%d_%H%M%S')))
-        with open(p, 'w', encoding='utf-8', newline='\n') as f:
-            f.write(text)
-    return 200, dict(api_npc_state(), ok=True, changed=text != old)
+    return save_generated(body, [_npc_path()], 'interactions.cpp', incore.validate, incore.generate, api_npc_state)
 
 
 def api_npc_preview(body):
@@ -872,38 +882,79 @@ def api_people_state():
             "topics": grcore.parse_subjects(dlg)[:9], "askTopics": pecore.ASK_TOPICS, "tiers": pecore.TIERS,
             "genders": pecore.GENDERS, "orient": pecore.ORIENT, "flags": [list(f) for f in pecore.FLAGS],
             "textMax": pecore.TEXT_MAX, "itemMax": pecore.ITEM_MAX, "maxItems": pecore.MAX_ITEMS,
-            "hash": _gr_hash_of(_pe_paths()), "files": list(_pe_paths())}
-
-
-def _gr_hash_of(paths):
-    hh = hashlib.sha1()
-    for p in paths:
-        if os.path.isfile(p):
-            with open(p, 'rb') as f:
-                hh.update(f.read())
-    return hh.hexdigest()
+            "hash": hash_files(_pe_paths()), "files": list(_pe_paths())}
 
 
 def api_people_save(body):
-    if body.get('hash') != _gr_hash_of(_pe_paths()) and not body.get('force'):
-        return 409, {"error": "personality.h/.cpp изменились на диске после загрузки. Перечитайте или сохраните принудительно."}
-    model = body['model']
-    errs = pecore.validate(model)
-    if errs:
-        return 400, {"error": "; ".join(errs[:5])}
-    h, c = pecore.generate(model, _gr_names())
-    changed = False
-    stamp = time.strftime('%Y%m%d_%H%M%S')
-    for path, text in zip(_pe_paths(), (h, c)):
-        old = open(path, encoding='utf-8').read() if os.path.isfile(path) else None
-        if old != text:
-            if old is not None:
-                os.makedirs(os.path.join(HERE, 'backups'), exist_ok=True)
-                shutil.copy2(path, os.path.join(HERE, 'backups', '%s_%s' % (stamp, os.path.basename(path))))
-            with open(path, 'w', encoding='utf-8', newline='\n') as f:
-                f.write(text)
-            changed = True
-    return 200, dict(api_people_state(), ok=True, changed=changed)
+    return save_generated(body, _pe_paths(), 'personality.h/.cpp', pecore.validate,
+                          lambda m: pecore.generate(m, _gr_names()), api_people_state)
+
+
+# ------------------------------------------------------------------ вкладка «Свет» (light_profiles.cpp)
+
+def _li_paths():
+    return [os.path.join(CFG['project'], 'src', 'light_profiles.cpp')]
+
+
+def api_light_state():
+    p = _li_paths()[0]
+    if not os.path.isfile(p):
+        return {"error": "нет %s" % p}
+    with open(p, encoding='utf-8') as f:
+        model = licore.parse(f.read())
+    tw = os.path.join(CFG['project'], 'src', 'time_weather_manager.cpp')
+    sky = licore.parse_sky(read_text(tw)[0]) if os.path.isfile(tw) else {}
+    usage_levels = {}
+    try:
+        usage_levels = stcore.load_usage(CFG['project']).get('levels', {})
+    except Exception:  # noqa: BLE001 — превью карты не обязательно
+        pass
+    return {"model": model, "limits": licore.LIMITS, "maxKeys": licore.MAX_KEYS, "sky": sky,
+            "maps": stcore.list_maps(CFG['project']), "tilesets": stcore.list_tilesets(CFG['project']),
+            "levelMaps": usage_levels, "hash": hash_files(_li_paths()), "files": _li_paths()}
+
+
+def api_light_save(body):
+    return save_generated(body, _li_paths(), 'light_profiles.cpp', licore.validate, licore.generate, api_light_state)
+
+
+# ------------------------------------------------------------------ вкладка «Миссии» (mission_order.cpp)
+
+def _mo_paths():
+    return [os.path.join(CFG['project'], 'src', 'mission_order.cpp')]
+
+
+def _mo_missions():
+    model = dlgcore.load_model(read_text(CFG['cpp'])[0])
+    return [{"id": m["index"], "name": m["name"], "title": m["title"], "dialogues": len(m["dialogues"])}
+            for m in model["missions"]]
+
+
+def api_missions_state():
+    p = _mo_paths()[0]
+    if not os.path.isfile(p):
+        return {"error": "нет %s" % p}
+    with open(p, encoding='utf-8') as f:
+        model = mocore.parse(f.read())
+    return {"model": model, "missions": _mo_missions(), "hash": hash_files(_mo_paths()), "files": _mo_paths()}
+
+
+def api_missions_save(body):
+    p = _mo_paths()[0]
+    old = open(p, encoding='utf-8').read()
+    ids = [m["id"] for m in _mo_missions()]
+    return save_generated(body, _mo_paths(), 'mission_order.cpp', lambda m: mocore.validate(m, ids),
+                          lambda m: mocore.generate(old, m), api_missions_state)
+
+
+# вкладка -> (state, save): маршруты /api/<tab>/state, /api/<tab>/save
+DATA_TABS = {
+    'groups': (api_groups_state, api_groups_save),
+    'people': (api_people_state, api_people_save),
+    'npc': (api_npc_state, api_npc_save),
+    'light': (api_light_state, api_light_save),
+    'missions': (api_missions_state, api_missions_save),
+}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -957,15 +1008,10 @@ class Handler(BaseHTTPRequestHandler):
                         return self._send(200, api_tiles_fg(q.get('tmx')))
                     if path == '/api/tiles/map':
                         return self._send(200, api_tiles_map(q.get('tmx')))
-            if path == '/api/people/state':
+            m = re.fullmatch(r'/api/(\w+)/state', path)
+            if m and m.group(1) in DATA_TABS:
                 with LOCK:
-                    return self._send(200, api_people_state())
-            if path == '/api/npc/state':
-                with LOCK:
-                    return self._send(200, api_npc_state())
-            if path == '/api/groups/state':
-                with LOCK:
-                    return self._send(200, api_groups_state())
+                    return self._send(200, DATA_TABS[m.group(1)][0]())
             if path == '/api/portraits/status':
                 with LOCK:
                     return self._send(200, api_portraits_status())
@@ -1004,17 +1050,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, {"ok": True})
                 if path == '/api/portraits/convert':
                     return self._send(200, api_portraits_convert(body))
-                if path == '/api/people/save':
-                    code, res = api_people_save(body)
-                    return self._send(code, res)
-                if path == '/api/npc/save':
-                    code, res = api_npc_save(body)
+                m = re.fullmatch(r'/api/(\w+)/save', path)
+                if m and m.group(1) in DATA_TABS:
+                    code, res = DATA_TABS[m.group(1)][1](body)
                     return self._send(code, res)
                 if path == '/api/npc/preview':
                     return self._send(200, api_npc_preview(body))
-                if path == '/api/groups/save':
-                    code, res = api_groups_save(body)
-                    return self._send(code, res)
                 if path == '/api/tiles/save':
                     code, res = api_tiles_save(body)
                     return self._send(code, res)

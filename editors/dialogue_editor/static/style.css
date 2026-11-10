@@ -512,3 +512,30 @@ body:not(.tab-dialogs) #sidebar,body:not(.tab-dialogs) #issuesBadge,body:not(.ta
 .gr-ph textarea.over{border-color:var(--err)}
 .pe-say .pe-none{display:none}
 .pe-say[data-empty="1"] .pe-none{display:inline}
+
+/* вкладка «Миссии» */
+.mo-list{display:flex;flex-direction:column;gap:2px;max-width:1000px}
+.mo-row{display:flex;align-items:center;gap:6px;padding:3px 6px;border:1px solid var(--line);border-radius:4px;background:var(--bg2)}
+.mo-row.over{border-color:var(--accent,#7aa2ff)}
+.mo-row.drag{opacity:.4}
+.mo-grip{cursor:grab;color:var(--muted);user-select:none}
+.mo-pos{width:28px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+.mo-note{flex:1;min-width:200px}
+.mo-dlg{color:var(--muted);font-size:12px;width:320px;flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mo-rest{margin-top:16px;display:flex;flex-direction:column;gap:2px;max-width:1000px}
+
+/* вкладка «Свет» */
+.li-head{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-bottom:10px}
+.li-cols{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start}
+.li-keys td{padding:2px 3px}
+.li-keys tr.on td{background:var(--panel2)}
+.li-keys .num{width:60px}
+.li-time{width:58px;font-family:var(--mono)}
+.li-note{width:200px}
+.li-color{width:34px;height:22px;padding:0;border:1px solid var(--line);background:none}
+.li-prev{display:flex;flex-direction:column;gap:6px}
+.li-ctl{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.li-strip{width:576px;height:14px;image-rendering:pixelated;cursor:pointer;border:1px solid var(--line)}
+.li-cv{image-rendering:pixelated;border:1px solid var(--line);cursor:grab;background:#000}
+.li-sw{display:inline-block;width:12px;height:12px;border:1px solid var(--line2);vertical-align:-2px}
+.gr-in.bad{border-color:var(--err)}

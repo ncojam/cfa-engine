@@ -17,18 +17,7 @@ const TAB_DEFS = {
     open() { openTiles(); },
     close() { $('#tiles').hidden = true; },
   },
-  groups: {
-    open() { openGroups(); },
-    close() { $('#groups').hidden = true; },
-  },
-  people: {
-    open() { openPeople(); },
-    close() { $('#people').hidden = true; },
-  },
-  npc: {
-    open() { openNpc(); },
-    close() { $('#npc').hidden = true; },
-  },
+  ...DATA_TABS,   // groups, people, npc, missions, light — datatab.js
 };
 
 function setTab(name) {
