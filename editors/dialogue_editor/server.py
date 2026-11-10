@@ -97,9 +97,17 @@ def meta_path():
 def load_meta():
     try:
         with open(meta_path(), encoding='utf-8') as fh:
-            return json.load(fh)
+            meta = json.load(fh)
     except (OSError, ValueError):
-        return {"dialogues": {}, "emotions": {}}
+        return {"dialogues": {}, "emotions": {}, "emoV": 2}
+    # emoV 2: эмоция 2 («говорит / указывает») слилась с 1 «нейтрально», номера выше — на 1 меньше.
+    if meta.get('emoV') != 2:
+        old = meta.get('emotions') or {}
+        meta['emotions'] = {str(int(k) - 1 if int(k) > 2 else int(k)): v for k, v in old.items()
+                            if k.lstrip('-').isdigit() and int(k) != 2}
+        meta['emoV'] = 2
+        save_meta(meta)
+    return meta
 
 
 def save_meta(meta):
