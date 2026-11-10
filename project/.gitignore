@@ -18,3 +18,6 @@ sounds/convert/
 *.kra~
 *.bmp~
 *.ss*
+resources/*.png
+resources/*.psd
+__pycache__/

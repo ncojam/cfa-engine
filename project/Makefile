@@ -13,7 +13,9 @@ GBAFIX   ?= gbafix
 # просто хранятся здесь.
 PARAMS = -specs=gba.specs -mcpu=arm7tdmi -mtune=arm7tdmi
 PARAMS += -fomit-frame-pointer -ffast-math -fno-rtti -fno-exceptions
-PARAMS += -mthumb -mthumb-interwork -g0 -O2
+# -g: отладочная информация только в out/graveblood.elf (для gbadbg: функции, строки исходников),
+# код и .gba от неё не меняются.
+PARAMS += -mthumb -mthumb-interwork -g -O2
 PARAMS += -Iout -I..
 
 # Список папок с исходниками (как в исходном Windows-Makefile)
