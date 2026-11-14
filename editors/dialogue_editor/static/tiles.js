@@ -712,6 +712,13 @@ function tlFgAdd(withPair) {
   toast(`fgtile добавлен в центр карты: ${2 * TL.sel}↔${2 * TL.sel + 1}. Перетащите на место.`);
 }
 
+function tlFgCopy() {   // копия выбранного fgtile со всеми свойствами, сдвиг на клетку вправо-вниз
+  const F = tlFgCur(), f = tlFgSelObj(); if (!F || !f) return;
+  const c = { id: 'n' + (++TL.fgSeq), x: f.x + 8, y: f.y + 8, w: f.w, h: f.h, kind: f.kind, props: { ...f.props } };
+  F.list.push(c); TL.fgSel = c.id; tlFgChanged();
+  toast('fgtile скопирован (Ctrl+D) — сдвинут на клетку, перетащите на место');
+}
+
 function tlFgDelete() {
   const F = tlFgCur(), f = tlFgSelObj(); if (!F || !f) return;
   F.list.splice(F.list.indexOf(f), 1); TL.fgSel = null; tlFgChanged();
@@ -727,7 +734,7 @@ function tlFgRenderBar() {
     return;
   }
   if (!f) {
-    bar.append(h('span', { class: 'tl-hint' }, 'Клик по fgtile — выбрать (и его пару в списке) · тащить — двигать · белый уголок — размер · Del — удалить · стрелки — сдвиг на клетку'));
+    bar.append(h('span', { class: 'tl-hint' }, 'Клик по fgtile — выбрать (и его пару в списке) · тащить — двигать · белый уголок — размер · Ctrl+D — копия · Del — удалить · стрелки — сдвиг на клетку'));
     return;
   }
   const upd = (k, v, isProp = true) => { if (isProp) f.props[k] = String(v); else f[k] = v; if (f.kind === 'trigger') { f.w = (parseInt(f.props.route, 10) || 1) * 8; f.h = (parseInt(f.props.num, 10) || 1) * 8; } tlFgChanged(); };
@@ -753,6 +760,7 @@ function tlFgRenderBar() {
     bar.append(h('span', { class: 'tl-hint' }, Object.entries(f.props).map(([k, v]) => `${k}=${v}`).join(' · ')));
   }
   bar.append(num('x', 'x', f.x, false, 'пиксели'), num('y', 'y', f.y, false, 'пиксели'),
+    h('button', { class: 'btn small', onclick: tlFgCopy, title: 'Копировать fgtile с теми же настройками (Ctrl+D)' }, '⧉ копия'),
     h('button', { class: 'btn small', onclick: tlFgDelete, title: 'Удалить fgtile (Del)' }, '🗑'));
 }
 
@@ -789,6 +797,7 @@ addEventListener('keydown', e => {
   const f = tlFgSelObj(); if (!f) return;
   const d = { ArrowLeft: [-8, 0], ArrowRight: [8, 0], ArrowUp: [0, -8], ArrowDown: [0, 8] }[e.key];
   if (d && !e.altKey) { e.preventDefault(); f.x = Math.max(0, f.x + d[0]); f.y = Math.max(0, f.y + d[1]); tlFgChanged(); }
+  else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyD') { e.preventDefault(); tlFgCopy(); }
   else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); tlFgDelete(); }
   else if (e.key === 'Escape') { TL.fgSel = null; tlFgChanged(); }
 });
