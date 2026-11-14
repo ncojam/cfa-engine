@@ -712,11 +712,25 @@ function tlFgAdd(withPair) {
   toast(`fgtile добавлен в центр карты: ${2 * TL.sel}↔${2 * TL.sel + 1}. Перетащите на место.`);
 }
 
-function tlFgCopy() {   // копия выбранного fgtile со всеми свойствами, сдвиг на клетку вправо-вниз
+function tlFgCopy(withPair) {   // копия выбранного fgtile; withPair - ещё и новая пара (копия свойств исходной) в конец таблицы
   const F = tlFgCur(), f = tlFgSelObj(); if (!F || !f) return;
   const c = { id: 'n' + (++TL.fgSeq), x: f.x + 8, y: f.y + 8, w: f.w, h: f.h, kind: f.kind, props: { ...f.props } };
-  F.list.push(c); TL.fgSel = c.id; tlFgChanged();
-  toast('fgtile скопирован (Ctrl+D) — сдвинут на клетку, перетащите на место');
+  let msg = 'fgtile скопирован (Ctrl+D) — сдвинут на клетку, перетащите на место';
+  if (withPair) {
+    const src = TL.pairs[tlFgPair(f)];
+    if (!src || f.kind === 'other') { toast('У этого fgtile нет пары — сделана обычная копия'); withPair = false; }
+    else {
+      const old = tlFgPair(f);
+      TL.pairs.push({ a: tlClone(src.a), b: tlClone(src.b), name_a: src.name_a, name_b: src.name_b, notes: [] });
+      const n = TL.pairs.length - 1;
+      if (f.kind === 'trigger') c.props.treetype = String(2 * n + ((parseInt(f.props.treetype, 10) || 0) & 1));
+      else for (const k of ['switch2dial', 'switchTile']) { const v = parseInt(f.props[k] ?? '-1', 10); if (v >= 0 && (v >> 1) === old) c.props[k] = String(2 * n + (v & 1)); }
+      msg = `fgtile скопирован с новой парой ${2 * n}↔${2 * n + 1} (копия свойств ${2 * old}↔${2 * old + 1}) — сдвинут на клетку, перетащите на место`;
+    }
+  }
+  F.list.push(c); TL.fgSel = c.id;
+  if (withPair) tlPick(TL.pairs.length - 1, true); else tlFgChanged();
+  toast(msg);
 }
 
 function tlFgDelete() {
@@ -734,7 +748,7 @@ function tlFgRenderBar() {
     return;
   }
   if (!f) {
-    bar.append(h('span', { class: 'tl-hint' }, 'Клик по fgtile — выбрать (и его пару в списке) · тащить — двигать · белый уголок — размер · Ctrl+D — копия · Del — удалить · стрелки — сдвиг на клетку'));
+    bar.append(h('span', { class: 'tl-hint' }, 'Клик по fgtile — выбрать (и его пару в списке) · тащить — двигать · белый уголок — размер · Ctrl+D — копия (Ctrl+Shift+D — с новой парой) · Del — удалить · стрелки — сдвиг на клетку'));
     return;
   }
   const upd = (k, v, isProp = true) => { if (isProp) f.props[k] = String(v); else f[k] = v; if (f.kind === 'trigger') { f.w = (parseInt(f.props.route, 10) || 1) * 8; f.h = (parseInt(f.props.num, 10) || 1) * 8; } tlFgChanged(); };
@@ -760,7 +774,8 @@ function tlFgRenderBar() {
     bar.append(h('span', { class: 'tl-hint' }, Object.entries(f.props).map(([k, v]) => `${k}=${v}`).join(' · ')));
   }
   bar.append(num('x', 'x', f.x, false, 'пиксели'), num('y', 'y', f.y, false, 'пиксели'),
-    h('button', { class: 'btn small', onclick: tlFgCopy, title: 'Копировать fgtile с теми же настройками (Ctrl+D)' }, '⧉ копия'),
+    h('button', { class: 'btn small', onclick: () => tlFgCopy(false), title: 'Копировать fgtile с теми же настройками, в ту же пару (Ctrl+D)' }, '⧉ копия'),
+    h('button', { class: 'btn small', onclick: () => tlFgCopy(true), title: 'Копия fgtile + новая пара в конец таблицы со свойствами исходной (Ctrl+Shift+D)' }, '⧉ копия + пара'),
     h('button', { class: 'btn small', onclick: tlFgDelete, title: 'Удалить fgtile (Del)' }, '🗑'));
 }
 
@@ -797,7 +812,7 @@ addEventListener('keydown', e => {
   const f = tlFgSelObj(); if (!f) return;
   const d = { ArrowLeft: [-8, 0], ArrowRight: [8, 0], ArrowUp: [0, -8], ArrowDown: [0, 8] }[e.key];
   if (d && !e.altKey) { e.preventDefault(); f.x = Math.max(0, f.x + d[0]); f.y = Math.max(0, f.y + d[1]); tlFgChanged(); }
-  else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyD') { e.preventDefault(); tlFgCopy(); }
+  else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyD') { e.preventDefault(); tlFgCopy(e.shiftKey); }
   else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); tlFgDelete(); }
   else if (e.key === 'Escape') { TL.fgSel = null; tlFgChanged(); }
 });
