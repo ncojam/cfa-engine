@@ -17,6 +17,10 @@ const TAB_DEFS = {
     open() { openTiles(); },
     close() { $('#tiles').hidden = true; },
   },
+  tilepack: {
+    open() { openTilepack(); },
+    close() { $('#tilepack').hidden = true; },
+  },
   ...DATA_TABS,   // groups, people, npc, missions, light — datatab.js
 };
 

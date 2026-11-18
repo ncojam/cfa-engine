@@ -12,6 +12,7 @@ Backups go to <editor>/backups/ before every save.
 Editor-only data (statuses, NPC per dialogue, emotion names) -> <editor>/editor_meta.json
 """
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -35,6 +36,7 @@ import incore  # noqa: E402
 import pecore  # noqa: E402
 import licore  # noqa: E402
 import mocore  # noqa: E402
+import tpcore  # noqa: E402
 
 PORTRAITS_DIR = os.path.normpath(os.path.join(HERE, '..', 'portraits'))
 sys.path.insert(0, PORTRAITS_DIR)
@@ -955,6 +957,76 @@ def api_missions_save(body):
                           lambda m: mocore.generate(old, m), api_missions_state)
 
 
+
+# ------------------------------------------------------------------ вкладка «Тайлсет» (упаковка картинки в тайлы)
+
+def _tp_payload(body):
+    P = dict(body)
+    P['bmp'] = _safe_name(P.get('bmp'), '.bmp')
+    P['maps'] = [_safe_name(m, '.tmx') for m in (P.get('maps') or tpcore.bmp_maps(CFG['project'], P['bmp']))]
+    return P
+
+
+def api_tp_state():
+    proj = CFG['project']
+    sets = [{"bmp": t['bmp'], "used": t['used'], "maps": tpcore.bmp_maps(proj, t['bmp'])}
+            for t in stcore.list_tilesets(proj)]
+    return {"tilesets": sets, "limit": stcore.VRAM_TILES, "outDir": "resources/tilepack_out"}
+
+
+def api_tp_scan(body):
+    P = _tp_payload(body)
+    out = tpcore.plan(CFG['project'], P)
+    sc = out['_sc']
+    res = tpcore.public(out)
+    layers = {}
+    for tmx in P['maps']:
+        ls, _ = tpcore.read_layers(_tmx_path(tmx))
+        layers[tmx] = [{"name": l['name'], "visible": l['visible'], "unique": len(set(l['gids']))} for l in ls]
+    pairs = []
+    with open(_st_table(), encoding='utf-8') as f:
+        _, tp, _ = stcore.parse_table(f.read())
+    for i in out['pairs']:
+        pairs.append({"idx": i, "name": "%s -> %s" % (tp[i]['name_a'], tp[i]['name_b'])})
+    ts = sc['ts']
+    res.update(status=sc['status'], cls=ts.cls, orient=ts.orient, groups={str(k): v for k, v in sc['groups'].items()}, tw=ts.tw, th=ts.th,
+               layers=layers, maps=P['maps'], pairsInfo=pairs, blank=sc['blank'],
+               mtime=os.path.getmtime(tpcore.ts_path(CFG['project'], P['bmp'])))
+    return res
+
+
+def api_tp_plan(body):
+    P = _tp_payload(body)
+    out = tpcore.plan(CFG['project'], P, images=bool(body.get('images')), auto=bool(body.get('doAuto')),
+                      with_suggest=bool(body.get('suggest')))
+    return tpcore.public(out)
+
+
+def api_tp_image(body):
+    p = tpcore.add_pic(body.get('name') or 'picture', base64.b64decode(body['data']))
+    return {"id": p.id, "w": p.ts.tw, "h": p.ts.th, "padded": p.padded, "png": tpcore.png_b64(p.w, p.h, p.rgb)}
+
+
+def api_tp_apply(body):
+    P = _tp_payload(body)
+    P['force'] = False
+    res = tpcore.apply(CFG['project'], HERE, P)
+    TILESET_CACHE.clear()
+    return res
+
+
+def api_tp_export(body):
+    P = _tp_payload(body)
+    return tpcore.export_tmx(CFG['project'], HERE, P)
+
+
+def api_tp_bmp_png(bmp):
+    b = tpcore.Bmp.load(tpcore.ts_path(CFG['project'], _safe_name(bmp, '.bmp')))
+    return tpcore.write_png(b.w, b.h, b.rgb)
+
+
+TP_POST = {'scan': api_tp_scan, 'plan': api_tp_plan, 'image': api_tp_image, 'apply': api_tp_apply, 'export': api_tp_export}
+
 # вкладка -> (state, save): маршруты /api/<tab>/state, /api/<tab>/save
 DATA_TABS = {
     'groups': (api_groups_state, api_groups_save),
@@ -1005,6 +1077,13 @@ class Handler(BaseHTTPRequestHandler):
                 if png is None:
                     return self._send(404, {"error": "no portrait"})
                 return self._send(200, png, 'image/png')
+            if path == '/api/tilepack/state':
+                with LOCK:
+                    return self._send(200, api_tp_state())
+            if path == '/api/tilepack/bmp.png':
+                q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+                with LOCK:
+                    return self._send(200, api_tp_bmp_png(q.get('bmp')), 'image/png')
             if path.startswith('/api/tiles/'):
                 q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
                 with LOCK:
@@ -1064,6 +1143,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(code, res)
                 if path == '/api/npc/preview':
                     return self._send(200, api_npc_preview(body))
+                m = re.fullmatch(r'/api/tilepack/(\w+)', path)
+                if m and m.group(1) in TP_POST:
+                    try:
+                        return self._send(200, TP_POST[m.group(1)](body))
+                    except (ValueError, KeyError, OSError) as e:
+                        return self._send(400, {"error": str(e)})
                 if path == '/api/tiles/save':
                     code, res = api_tiles_save(body)
                     return self._send(code, res)
