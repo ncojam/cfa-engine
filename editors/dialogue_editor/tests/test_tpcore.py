@@ -191,6 +191,34 @@ class TpCoreTest(unittest.TestCase):
         self.assertTrue(ex["tmx"].startswith(os.path.join(self.tmp.name, "cp")))
         self.assertIn('source="mycopy.tsx"', open(ex["tmx"], encoding="utf-8").read())
 
+    def test_mirror_partner_and_palette_cap(self):
+        sc = tpcore.scan(self.proj, "mts-t.bmp", ["map-t.tmx"])
+        ts = sc["ts"]
+        a, m = 10, 60
+        # делаем 60 зеркалом 10 по X (синтетика могла выбрать другую ориентацию)
+        b = Bmp.load(os.path.join(self.proj, "images", "mts-t.bmp"))
+        cells = tpcore.split_cells(b.w, b.h, b.rgb)
+        cells[60] = tpcore.flip_rgb(cells[10], 1)
+        Bmp(b.w, b.h, b.header, tpcore.join_cells(cells, b.w // 8, b.h // 8)).save(os.path.join(self.proj, "images", "mts-t.bmp"))
+        sc = tpcore.scan(self.proj, "mts-t.bmp", ["map-t.tmx"])
+        ts = sc["ts"]
+        self.assertEqual(ts.orient[10] ^ ts.orient[60], 1)
+        rng = random.Random(11)
+        t = rnd_tile(rng)
+        cells = [t, tpcore.flip_rgb(t, 1)] + [MAG_TILE] * 2
+        pic = tpcore.add_pic("m.png", write_png(32, 8, join_cells(cells, 4, 1)))
+        out = tpcore.plan(self.proj, {"bmp": "mts-t.bmp", "areas": [10], "img": pic.id, "place": {"mode": "holes"}})
+        self.assertEqual(out["errors"], [])
+        W = ts.tw
+        pos = {(r, c) for r, c in out["layout"]["pos"]}
+        self.assertEqual(pos, {(10 // W, 10 % W), (60 // W, 60 % W)})
+        # палитра
+        base = tpcore.colors_of([MAG_TILE])
+        tile = bytes(v for i in range(64) for v in (i * 4 % 256, (i * 9) % 256, (i * 17) % 256))
+        fin, n = tpcore.reduce_colors([tile], base, 20)
+        self.assertGreater(n, 0)
+        self.assertLessEqual(len(tpcore.colors_of(fin) | base), 20)
+
     def test_png_roundtrip_and_alpha(self):
         rgb = bytes(range(0, 192)) * 1
         w, h, back, padded = tpcore.load_image_bytes(write_png(8, 8, rgb))

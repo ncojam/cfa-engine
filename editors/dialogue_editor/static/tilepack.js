@@ -151,12 +151,14 @@ function tpkDrawSet() {
   const g = cv.getContext('2d');
   g.imageSmoothingEnabled = false;
   g.drawImage(TPK.tsImg, 0, 0, cv.width, cv.height);
+  const mir = new Set((TPK.plan && TPK.plan.tiles && TPK.plan.tiles.mirrorCells) || []);
   for (let i = 0; i < status.length; i++) {
     const x = (i % tw) * S, y = Math.floor(i / tw) * S, s = status[i];
     if (TPK.sel.has(TPK.cellRoot[i])) {
       g.fillStyle = s === 'f' ? 'rgba(230,60,50,.55)' : 'rgba(255,150,0,.6)'; g.fillRect(x, y, S, S);
       g.strokeStyle = '#fff'; g.lineWidth = 1; g.beginPath(); g.moveTo(x + 2, y + 2); g.lineTo(x + S - 2, y + S - 2); g.moveTo(x + S - 2, y + 2); g.lineTo(x + 2, y + S - 2); g.stroke();
     }
+    if (mir.has(i)) { g.fillStyle = 'rgba(170,90,255,.18)'; g.fillRect(x, y, S, S); g.setLineDash([3, 2]); g.strokeStyle = '#b05cff'; g.lineWidth = 1; g.strokeRect(x + .5, y + .5, S - 1, S - 1); g.setLineDash([]); }
     if (TPK.areas.has(i)) { g.fillStyle = 'rgba(170,90,255,.4)'; g.fillRect(x, y, S, S); g.strokeStyle = '#b05cff'; g.lineWidth = 2; g.strokeRect(x + 1, y + 1, S - 2, S - 2); }
     if (s === 'f') {
       g.strokeStyle = '#ff4a3d'; g.lineWidth = 1; g.strokeRect(x + .5, y + .5, S - 1, S - 1);
@@ -270,7 +272,7 @@ function tpkRender1() {
     h('div', { class: 'tp-legend' },
       h('span', { class: 'tp-sw', style: 'border-color:#ff4a3d' }), 'не используется - можно снести (клик выбирает тайл вместе с его копиями)  ',
       h('span', { class: 'tp-sw', style: 'background:rgba(255,150,0,.7)' }), 'выбран на удаление используемый тайл  ',
-      h('span', { class: 'tp-sw', style: 'border-color:#b05cff;background:rgba(170,90,255,.4)' }), 'область подмены  ',
+      h('span', { class: 'tp-sw', style: 'border-color:#b05cff;background:rgba(170,90,255,.4)' }), 'область подмены (пунктиром - её отражения по X, куда лягут отражённые копии)  ',
       h('span', { class: 'tp-sw', style: 'border-color:#27c7e8;border-width:2px' }), 'нужен подмене тайлов (fgtile) - трогать нельзя  ',
       h('span', { class: 'tp-sw', style: 'background:rgba(120,120,120,.6)' }), 'не используется, но это повтор/отражение нужного - память не освободит'),
     h('div', { class: 'tp-row' },

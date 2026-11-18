@@ -881,6 +881,60 @@ def colors_of(cells):
     return s
 
 
+PAL_MAX = 255            # цветов в палитре (с маджентой), 5 бит на канал
+
+
+def reduce_colors(final, base, cap=PAL_MAX):
+    """если цветов (5 бит) станет больше cap, самые редкие/близкие новые цвета заменяются ближайшими:
+    финальные ячейки меняются (только новые цвета, цвета самого тайлсета base не трогаются) -> (ячейки, сколько цветов слито)"""
+    w = {}
+    for c in final:
+        for i in range(0, TP * 3, 3):
+            col = (c[i] >> 3, c[i + 1] >> 3, c[i + 2] >> 3)
+            if col not in base:
+                w[col] = w.get(col, 0) + 1
+    over = len(base) + len(w) - cap
+    if over <= 0:
+        return final, 0
+    targets = set(base) | set(w)
+    d2 = lambda a, b: (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2
+
+    def nearest(c):
+        best = None
+        for t in targets:
+            if t != c:
+                d = d2(c, t)
+                if best is None or d < best[0]:
+                    best = (d, t)
+        return best
+    near = {c: nearest(c) for c in w}
+    mapping = {}
+    for _ in range(over):
+        c = min(near, key=lambda x: w[x] * near[x][0])
+        d, t = near.pop(c)
+        mapping[c] = t
+        targets.discard(c)
+        if t in w:
+            w[t] += w[c]
+        for x in near:
+            if near[x][1] in (c, t):
+                near[x] = nearest(x)
+    def fin(col):
+        while col in mapping:
+            col = mapping[col]
+        return col
+    out = []
+    for c in final:
+        b = bytearray(c)
+        for i in range(0, TP * 3, 3):
+            col = (c[i] >> 3, c[i + 1] >> 3, c[i + 2] >> 3)
+            if col in mapping:
+                n = fin(col)
+                b[i], b[i + 1], b[i + 2] = n[0] << 3, n[1] << 3, n[2] << 3
+        out.append(bytes(b))
+    return out, len(mapping)
+
+
 def canon(key):
     return min(flip_key(key, o) for o in range(4))
 
@@ -898,7 +952,16 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
     dele = [int(x) for x in P.get("delete") or [] if int(x) in sc["groups"]]
     del_cells = [c for r in dele for c in sc["groups"][r]]
     areas = sorted({int(c) for c in P.get("areas") or [] if 0 <= int(c) < len(ts0.cells)})
-    ts1 = ts0.derive(blank=del_cells + areas)
+    byc = {}
+    for d in range(len(ts0.cells)):
+        byc.setdefault(ts0.cls[d], []).append(d)
+    pmap = {}                                # ячейка области -> ячейка с её отражением по X (уже есть в тайлсете)
+    for c in areas:
+        cand = [d for d in byc[ts0.cls[c]] if ts0.orient[d] == ts0.orient[c] ^ 1]
+        if cand:
+            pmap[c] = min(cand, key=lambda d: (d in areas, d))
+    areas_all = sorted(set(areas) | set(pmap.values()))
+    ts1 = ts0.derive(blank=del_cells + areas_all)
     pcls = sc["prot"]["classes"]
     keep_cells = set(sc["used"]) | {c for c in range(len(ts0.cells)) if ts0.cls[c] in pcls}
 
@@ -915,7 +978,7 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
                     "protectedOnly": len(pcls - sc["used_cls"]), "freeable": len(sc["groups"]),
                     "unusedClasses": len(sc["unused"]), "keepBefore": len(keep0), "keepAfter": len(keep1),
                     "leftover": ts1.count - len(keep1), "free": limit - len(keep1),
-                    "beyond": max(0, ts1.count - limit), "areas": len(areas),
+                    "beyond": max(0, ts1.count - limit), "areas": len(areas), "mirrorAreas": len(set(pmap.values()) - set(areas)), "mirrorCells": sorted(set(pmap.values()) - set(areas)),
                     "usedInAreas": sum(1 for c in areas if c in sc["used"])}
     if out["tiles"]["usedInAreas"]:
         out["warnings"].append("%d используемых картой ячеек лежат в областях подмены: их содержимое будет перезаписано" % out["tiles"]["usedInAreas"])
@@ -953,6 +1016,9 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
             tk = ts1.keys[int(r["to"][1:])] if r["to"].startswith("e") else pic.ts.keys[int(r["to"][1:])]
             r["d"] = tile_dist(pic.ts.keys[int(pid_[1:])], tk, r["o"])
     final, changed = final_cells(pic, ts1, reuse, repl, skip)
+    final, merged = reduce_colors(final, colors_of(ts1.cells))
+    if merged:
+        out["warnings"].append("цветов было больше %d: %d самых близких/редких новых цветов слито с похожими" % (PAL_MAX, merged))
     err_total, err_max = pic_error(pic, final)
     items = needed_cells(pic, ts1, final)
     # новых тайлов VRAM: классы нужных ячеек, которых ещё нет в наборе (зеркальные копии существующих - бесплатно)
@@ -972,7 +1038,7 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
                   "uniqueExact": len(set(pic.ts.keys)), "classes": len(pic.classes), "reused": len(reuse),
                   "new": len(new), "replaced": len(repl), "needTiles": need_tiles, "newCells": len(items),
                   "fits": need_tiles <= free, "overflow": max(0, need_tiles - free), "changedCells": changed,
-                  "skipped": len(skip), "free": free, "cellCls": list(pic.ts.cls),
+                  "skipped": len(skip), "free": free, "mergedColors": merged, "cellCls": list(pic.ts.cls),
                   "errTotal": err_total, "errMax": err_max,
                   "colors": len(colors_of(pic.ts.cells)), "newColors": len(colors_of(pic.ts.cells) - colors_of(ts1.cells))}
     out["classes"] = [{"id": p, "cell": int(p[1:]), "count": pic.count[int(p[1:])], "skip": p in skip}
@@ -995,7 +1061,7 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
     roots = set(ts1.opt_root)
     prot, ranges = sc["prot"]["classes"], sc["prot"]["ranges"]
     bl_root = blank_class(ts1)
-    aset = set(areas) - {bl_root}
+    aset = set(areas_all) - {bl_root}
 
     def usable(a, key):
         """в ячейку a можно положить тайл key: она пуста и не нужна, не лежит внутри диапазона подмены и
@@ -1011,11 +1077,32 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
 
     conflicts = []
     if items and pmode == "holes":
+        taken, abs_cells = set(), [None] * len(items)
+        # оригиналы - в область, их отражения по X - в ячейки, где лежали отражения прежних тайлов области
+        mir = {c: d for c, d in pmap.items() if c in aset and d in aset}
+        groups = {}
+        for n, it in enumerate(items):
+            groups.setdefault(canon(it["key"]), []).append(n)
+        pairs_ = []
+        for ns in groups.values():
+            vx = [n for n in ns[1:] if items[n]["key"] == flip_key(items[ns[0]]["key"], 1)]
+            pairs_.append((ns[0], vx[0] if vx else None))
+        with_p = [c for c in areas if c in mir]
+        without = [c for c in areas if c in aset and c not in mir]
+        for b_, v_ in [p for p in pairs_ if p[1] is not None]:
+            if with_p:
+                c = with_p.pop(0)
+                abs_cells[b_], abs_cells[v_] = c, mir[c]
+                taken.update((c, mir[c]))
+        rest = without + with_p
+        for b_, v_ in [p for p in pairs_ if p[1] is None]:
+            if rest:
+                abs_cells[b_] = rest.pop(0)
+                taken.add(abs_cells[b_])
         free_cells = sorted(aset) + [c for c in range(len(ts0.cells))
                                      if c not in aset and is_blank(ts1.keys[c]) and c not in refs and c not in roots]
-        taken, abs_cells = set(), [None] * len(items)
         tail = len(ts0.cells)
-        for n in [n for run in runs_of(pic, items) for n in run]:
+        for n in [n for run in runs_of(pic, items) for n in run if abs_cells[n] is None]:
             for c in free_cells:
                 if c not in taken and usable(c, items[n]["key"]):
                     abs_cells[n] = c
@@ -1054,8 +1141,8 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
             hint = (" (по карте всё помещается - удалите оставшиеся неиспользуемые тайлы: %d шт. или отметьте области подмены)" % out["tiles"]["leftover"]
                     if need_tiles <= free else ": сожмите сильнее, пометьте неучтённые или освободите место")
             out["errors"].append("%d тайлов карты/картинки окажутся за пределом VRAM (%d)%s" % (len(over), limit, hint))
-        if cols > 256:
-            out["errors"].append("в тайлсете получится %d цветов (максимум 256 - иначе tmx2incl откажется собирать)" % cols)
+        if cols > PAL_MAX:
+            out["errors"].append("в тайлсете получится %d цветов (максимум %d - иначе tmx2incl откажется собирать)" % (cols, PAL_MAX))
     if (P.get("target") or {}).get("mode") == "copy":      # отдельная копия: основной тайлсет не трогаем, проверки - подсказки
         out["warnings"] += [e for e in out["errors"] if e != conflict_msg]
         out["errors"] = [e for e in out["errors"] if e == conflict_msg]
