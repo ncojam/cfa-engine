@@ -1090,12 +1090,13 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
         with_p = [c for c in areas if c in mir]
         without = [c for c in areas if c in aset and c not in mir]
         for b_, v_ in [p for p in pairs_ if p[1] is not None]:
-            if with_p:
-                c = with_p.pop(0)
+            c = next((c for c in with_p if c not in taken and mir[c] not in taken and mir[c] != c), None)
+            if c is not None:                 # у разных ячеек области отражение может быть общим - берём каждую ячейку один раз
                 abs_cells[b_], abs_cells[v_] = c, mir[c]
                 taken.update((c, mir[c]))
-        rest = without + with_p
+        rest = [c for c in without + with_p if c not in taken]
         for b_, v_ in [p for p in pairs_ if p[1] is None]:
+            rest = [c for c in rest if c not in taken]
             if rest:
                 abs_cells[b_] = rest.pop(0)
                 taken.add(abs_cells[b_])
@@ -1111,6 +1112,8 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
                 abs_cells[n] = tail
                 tail += 1
             taken.add(abs_cells[n])
+        if len(set(abs_cells)) != len(abs_cells):
+            raise ValueError("внутренняя ошибка раскладки: две ячейки картинки попали в одну - пришлите область подмены и картинку")
         new_th = max(ts0.th, (max(abs_cells) // ts0.tw) + 1)
         rows, row0, col0 = new_th - ts0.th, ts0.th, 0
     elif items:

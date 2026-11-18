@@ -219,6 +219,23 @@ class TpCoreTest(unittest.TestCase):
         self.assertGreater(n, 0)
         self.assertLessEqual(len(tpcore.colors_of(fin) | base), 20)
 
+    def test_shared_mirror_cell_does_not_collide(self):
+        b = Bmp.load(os.path.join(self.proj, "images", "mts-t.bmp"))
+        cells = tpcore.split_cells(b.w, b.h, b.rgb)
+        cells[11] = cells[10]
+        cells[60] = tpcore.flip_rgb(cells[10], 1)
+        Bmp(b.w, b.h, b.header, tpcore.join_cells(cells, b.w // 8, b.h // 8)).save(os.path.join(self.proj, "images", "mts-t.bmp"))
+        rng = random.Random(21)
+        pics = []
+        for _ in range(3):
+            t = rnd_tile(rng)
+            pics += [t, tpcore.flip_rgb(t, 1)]
+        pic = tpcore.add_pic("s.png", write_png(48, 8, join_cells(pics, 6, 1)))
+        out = tpcore.plan(self.proj, {"bmp": "mts-t.bmp", "areas": [10, 11], "img": pic.id, "place": {"mode": "holes"}})
+        self.assertEqual(out["errors"], [])
+        pos = [tuple(p) for p in out["layout"]["pos"]]
+        self.assertEqual(len(pos), len(set(pos)))
+
     def test_png_roundtrip_and_alpha(self):
         rgb = bytes(range(0, 192)) * 1
         w, h, back, padded = tpcore.load_image_bytes(write_png(8, 8, rgb))
