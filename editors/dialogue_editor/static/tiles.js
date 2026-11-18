@@ -169,6 +169,7 @@ function tlRenderHead(P) {
     h('button', { class: 'btn small', title: 'Поменять местами состояния a и b этой пары (и их названия): что было слева/сверху, станет справа/снизу',
       onclick: () => { const P = TL.pairs[i]; [P.a, P.b] = [P.b, P.a]; [P.name_a, P.name_b] = [P.name_b, P.name_a]; tlRender(); } }, '⇄ a ↔ b'),
     tlDirty(i) && i < TL.orig.length ? h('button', { class: 'btn small ghost', onclick: () => { TL.pairs[i] = tlClone(TL.orig[i]); tlRender(); } }, 'сбросить пару') : null,
+    h('button', { class: 'btn small danger', onclick: () => tlDeletePair(i), title: 'Удалить эту пару из supertiles.cpp вместе с её fgtile-триггерами (номера следующих пар сдвигаются, ссылки в картах пересчитываются)' }, '🗑 пара'),
     h('button', { class: 'btn', onclick: () => tlReload(), title: 'Перечитать supertiles.cpp и карты с диска' }, '⟳ С диска'),
     h('button', { class: 'btn primary' + (dirty ? ' dirty' : ''), disabled: !dirty || TL.busy, onclick: () => tlSave(), title: 'Записать в src/supertiles.cpp (Ctrl+S)' }, 'Сохранить'));
 }
@@ -545,6 +546,32 @@ function tlAddPair() {
   tlPick(TL.pairs.length - 1, true);
 }
 
+async function tlDeletePair(i) {
+  if (i == null || i < 0 || i >= TL.pairs.length) return;
+  const name = `[${2 * i}] ${TL.pairs[i].name_a || '?'} ↔ [${2 * i + 1}] ${TL.pairs[i].name_b || '?'}`;
+  if (i >= TL.orig.length) {   // пара ещё не сохранена
+    if (i !== TL.pairs.length - 1) { toast('Несохранённую пару можно удалить только последней - сначала сохраните', 'err'); return; }
+    if (!confirm('Убрать несохранённую пару ' + name + ' и её fgtile?')) return;
+    TL.pairs.pop();
+    for (const F of Object.values(TL.fgs)) F.list = F.list.filter(f => !(f.kind === 'trigger' && tlFgPair(f) === i));
+    TL.fgSel = null; tlPick(Math.max(0, i - 1), true); return;
+  }
+  if (tlAnyDirty()) { toast('Есть несохранённые правки - сначала сохраните или сбросьте их, потом удаляйте пару', 'err'); return; }
+  try {
+    const r = (await api('/api/tiles/delpair', { idxs: [i], dry: true })).report;
+    const fgTxt = Object.entries(r.fg).map(([t, v]) => `  ${t}: удалить fgtile - ${v.deleted.length}, поправить номера - ${v.changed.length}`).join('\n') || '  fgtile не затронуты';
+    const shifted = TL.pairs.length - 1 - i;
+    if (!confirm(`Удалить пару ${name} из supertiles.cpp?\n\n${fgTxt}\nОбластей игрока удалится: ${r.areas}\n` +
+      (shifted ? `Номера ${shifted} следующих пар уменьшатся на 1 (состояния на 2) - в картах и областях это пересчитается.\n` : '') +
+      '\nФайлы уйдут в backups/. ' + r.warnings.join(' '))) return;
+    const st = await api('/api/tiles/delpair', { idxs: [i], hash: TL.state.hash });
+    TL.fgs = {}; TL.fgSel = null; TL.maps = {};
+    tlIngest(st, false);
+    tlPick(Math.min(i, TL.pairs.length - 1), true);
+    toast(`Пара ${name} удалена` + (Object.keys(st.report.fg).length ? ' - пересоберите графику (build_graphics.sh)' : ''), 'ok');
+  } catch (e) { toast('Не удалено: ' + e.message, 'err'); }
+}
+
 async function tlReload() {
   if (tlAnyDirty() && !confirm('Есть несохранённые правки подмены тайлов. Перечитать с диска и потерять их?')) return;
   TL.sets = {}; TL.maps = {}; TL.fgs = {}; TL.fgSel = null; TL.state = null;
@@ -776,7 +803,8 @@ function tlFgRenderBar() {
   bar.append(num('x', 'x', f.x, false, 'пиксели'), num('y', 'y', f.y, false, 'пиксели'),
     h('button', { class: 'btn small', onclick: () => tlFgCopy(false), title: 'Копировать fgtile с теми же настройками, в ту же пару (Ctrl+D)' }, '⧉ копия'),
     h('button', { class: 'btn small', onclick: () => tlFgCopy(true), title: 'Копия fgtile + новая пара в конец таблицы со свойствами исходной (Ctrl+Shift+D)' }, '⧉ копия + пара'),
-    h('button', { class: 'btn small', onclick: tlFgDelete, title: 'Удалить fgtile (Del)' }, '🗑'));
+    h('button', { class: 'btn small', onclick: tlFgDelete, title: 'Удалить fgtile (Del)' }, '🗑'),
+    f.kind === 'trigger' && (tlFgPair(f) < TL.pairs.length) ? h('button', { class: 'btn small danger', onclick: () => tlDeletePair(tlFgPair(f)), title: 'Удалить пару этого fgtile из supertiles.cpp вместе со всеми её fgtile' }, '🗑 + пара') : null);
 }
 
 function tlFgFocus() {   // приблизить к связанным с парой fgtile

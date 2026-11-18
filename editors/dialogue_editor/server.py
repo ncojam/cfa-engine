@@ -785,6 +785,16 @@ def api_tiles_save(body):
     return 200, dict(api_tiles_state(), ok=True, changed=(new != old) or bool(fg) or body.get('areas') is not None, newIds=new_ids)
 
 
+def api_tiles_delpair(body):
+    idxs = [int(i) for i in body.get('idxs') or []]
+    if not body.get('dry') and not body.get('force') and body.get('hash') != _st_hash():
+        return 409, {"error": "supertiles.cpp изменился на диске после загрузки. Перечитайте."}
+    rep = stcore.delete_pairs(CFG['project'], idxs, os.path.join(HERE, 'backups'), write=not body.get('dry'))
+    if body.get('dry'):
+        return 200, {"ok": True, "report": rep}
+    return 200, dict(api_tiles_state(), ok=True, report=rep)
+
+
 # ------------------------------------------------------------------ вкладка «Группы»
 
 def _gr_paths():
@@ -1153,6 +1163,12 @@ class Handler(BaseHTTPRequestHandler):
                         return self._send(400, {"error": str(e)})
                 if path == '/api/tiles/save':
                     code, res = api_tiles_save(body)
+                    return self._send(code, res)
+                if path == '/api/tiles/delpair':
+                    try:
+                        code, res = api_tiles_delpair(body)
+                    except (ValueError, KeyError, OSError) as e:
+                        return self._send(400, {"error": str(e)})
                     return self._send(code, res)
                 if path == '/api/rescan':
                     index_inc_files()

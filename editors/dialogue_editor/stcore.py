@@ -10,9 +10,11 @@ import base64
 import json
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
+import time
 import xml.etree.ElementTree as ET
 
 VRAM_TILES = 864          # memcpy( TILE_DATA, mapTileData, 64 * 864 ) в applyTileSet
@@ -453,3 +455,112 @@ def save_areas(project, areas):
                 f.write('\n   %s: %s%s' % (json.dumps(k), json.dumps(clean[m][k], separators=(",", ":")), "," if j < len(states) - 1 else ""))
             f.write('\n  }%s' % ("," if i < len(maps) - 1 else ""))
         f.write('\n }\n}\n')
+
+
+# ------------------------------------------------------------------ удаление пар подмены
+
+def delete_pairs(project, idxs, backup_dir=None, write=False):
+    """Удалить пары supertiles.cpp с номерами idxs. Номера состояний (2*пара, 2*пара+1) у всех следующих пар сдвигаются,
+    поэтому правятся и ссылки: fgtile-триггеры (treetype) удаляемых пар удаляются, у дверей (switch2dial/switchTile)
+    ссылка становится -1, остальные номера сдвигаются во всех tmx из resources; области supertile_areas.json - так же.
+    Без write только отчёт. Номера, зашитые в C++, не знаю - их проверяют вручную."""
+    P = paths(project)
+    with open(P["table"], encoding="utf-8") as f:
+        text = f.read()
+    lines, pairs, _ = parse_table(text)
+    dead = sorted({int(i) for i in idxs})
+    if not dead or dead[0] < 0 or dead[-1] >= len(pairs):
+        raise ValueError("нет такой пары")
+
+    def smap(v):
+        """номер состояния -> новый номер, -1 - не трогать, None - состояния больше нет"""
+        if v < 0:
+            return v
+        p = v >> 1
+        if p in dead:
+            return None
+        return v - 2 * sum(1 for d in dead if d < p)
+
+    rep = {"pairs": [], "fg": {}, "areas": 0, "warnings": []}
+    # --- таблица
+    drop = set()
+    for i in dead:
+        drop.add(pairs[i]["line"])
+        if pairs[i]["label"] is not None:
+            drop.add(pairs[i]["label"])
+        rep["pairs"].append("[%d] %s -> [%d] %s" % (2 * i, pairs[i]["name_a"] or "?", 2 * i + 1, pairs[i]["name_b"] or "?"))
+    kept = [l for n, l in enumerate(lines) if n not in drop]
+    lines2, pairs2, _ = parse_table("\n".join(kept))
+    for j, p in enumerate(pairs2):
+        if p["label"] is not None:
+            m = LABEL_RE.match(lines2[p["label"]])
+            lines2[p["label"]] = "%s// [%d] %s -> [%d] %s%s" % (m.group(1), 2 * j, m.group(3), 2 * j + 1, m.group(5),
+                                                              ("   @ " + m.group(6)) if m.group(6) else "")
+    new_table = "\n".join(lines2)
+    # --- fgtile во всех картах
+    res = P["resources"]
+    jobs = []
+    for f in sorted(os.listdir(res)):
+        if not f.endswith(".tmx"):
+            continue
+        tp = os.path.join(res, f)
+        changed, deleted = [], []
+        for fg in read_fgtiles(tp):
+            pr, k = dict(fg["props"]), fg["kind"]
+            if k == "trigger":
+                try:
+                    v = int(pr.get("treetype", "0"))
+                except ValueError:
+                    continue
+                n = smap(v)
+                if n is None:
+                    deleted.append(fg["id"])
+                elif n != v:
+                    pr["treetype"] = str(n)
+                    changed.append({"id": fg["id"], "x": fg["x"], "y": fg["y"], "w": fg["w"], "h": fg["h"], "props": pr})
+            elif k == "door":
+                touched = False
+                for key in ("switch2dial", "switchTile"):
+                    try:
+                        v = int(pr.get(key, "-1"))
+                    except ValueError:
+                        continue
+                    n = smap(v)
+                    nv = -1 if n is None else n
+                    if nv != v:
+                        pr[key] = str(nv)
+                        touched = True
+                if touched:
+                    changed.append({"id": fg["id"], "x": fg["x"], "y": fg["y"], "w": fg["w"], "h": fg["h"], "props": pr})
+        if changed or deleted:
+            jobs.append((f, tp, changed, deleted))
+            rep["fg"][f] = {"deleted": deleted, "changed": [c["id"] for c in changed]}
+    # --- области игрока
+    areas = load_areas(project)
+    new_areas = {}
+    for m, st in areas.items():
+        for k, v in st.items():
+            n = smap(int(k))
+            if n is None:
+                rep["areas"] += 1
+            else:
+                new_areas.setdefault(m, {})[str(n)] = v
+    rep["warnings"].append("номера состояний, зашитые в C++ (а не взятые из карт), не пересчитываются - проверьте вручную")
+    if not write:
+        return rep
+    if backup_dir:
+        os.makedirs(backup_dir, exist_ok=True)
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        shutil.copy2(P["table"], os.path.join(backup_dir, "supertiles_%s.cpp" % stamp))
+        for f, tp, _, _ in jobs:
+            shutil.copy2(tp, os.path.join(backup_dir, "%s_%s" % (stamp, f)))
+        if os.path.isfile(P["areas"]):
+            shutil.copy2(P["areas"], os.path.join(backup_dir, "%s_%s" % (stamp, os.path.basename(P["areas"]))))
+    with open(P["table"], "w", encoding="utf-8", newline="\n") as f:
+        f.write(new_table)
+    for _, tp, changed, deleted in jobs:
+        save_fgtiles(tp, changed, [], deleted)
+    if areas and new_areas != areas:
+        save_areas(project, new_areas)
+    refresh_usage(project)
+    return rep

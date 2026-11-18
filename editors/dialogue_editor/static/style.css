@@ -584,3 +584,4 @@ body:not(.tab-dialogs) #sidebar,body:not(.tab-dialogs) #issuesBadge,body:not(.ta
 .tp-pick{align-self:flex-end;border:1px solid var(--line);border-radius:var(--r);padding:2px 8px;position:relative}
 .tp-pick summary{cursor:pointer}
 .tp-maplist{display:flex;flex-direction:column;max-height:260px;overflow:auto;padding:4px 0}
+.btn.danger{color:#ff6b5e;border-color:#6a2a25}
