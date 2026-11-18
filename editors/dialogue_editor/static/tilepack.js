@@ -112,11 +112,16 @@ async function tpkRefresh(opts = {}) {
     TPK.plan = pl;
     if (pl.suggest) TPK.sugg = pl.suggest;
     if (pl.repl) TPK.repl = pl.repl;
+    TPK.replOk = JSON.stringify(TPK.repl);
     if (pl.images) {
       TPK.finalImg = await tpkLoadImg(pl.images.final);
       TPK.afterImg = pl.images.after ? await tpkLoadImg(pl.images.after) : null;
     }
-  } catch (err) { toast(err.message, 'err'); TPK.plan = null; }
+  } catch (err) {   // не роняем картинку и замены: возвращаем последнее удачное состояние
+    toast(err.message, 'err');
+    try { TPK.repl = JSON.parse(TPK.replOk || '{}'); } catch (e2) { TPK.repl = {}; }
+    if (!TPK.plan) TPK.plan = null;
+  }
   TPK.busy = false;
   tpkBusyMark(false);
   tpkRenderAll();
@@ -356,7 +361,7 @@ async function tpkLoadFile(ev) {
     const r = await api('/api/tilepack/image', { name: f.name, data: btoa(bin) });
     TPK.pic = { id: r.id, w: r.w, h: r.h, name: f.name, padded: r.padded };
     TPK.picImg = await tpkLoadImg(r.png);
-    TPK.repl = {}; TPK.skip = new Set(); TPK.locked = new Set(); TPK.sugg = null; TPK.plan = null; TPK.log = [];
+    TPK.repl = {}; TPK.replOk = '{}'; TPK.skip = new Set(); TPK.locked = new Set(); TPK.sugg = null; TPK.plan = null; TPK.log = [];
     tpkRenderAll();
     tpkRefresh();
   } catch (err) { toast(err.message, 'err'); }

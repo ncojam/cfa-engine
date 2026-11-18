@@ -955,12 +955,14 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
     byc = {}
     for d in range(len(ts0.cells)):
         byc.setdefault(ts0.cls[d], []).append(d)
-    pmap = {}                                # ячейка области -> ячейка с её отражением по X (уже есть в тайлсете)
+    pmap = {}                                # ячейка области -> {o: ячейка с её отражением o (1 - по X, 2 - по Y, 3 - оба)}
     for c in areas:
-        cand = [d for d in byc[ts0.cls[c]] if ts0.orient[d] == ts0.orient[c] ^ 1]
-        if cand:
-            pmap[c] = min(cand, key=lambda d: (d in areas, d))
-    areas_all = sorted(set(areas) | set(pmap.values()))
+        for o in (1, 2, 3):
+            cand = [d for d in byc[ts0.cls[c]] if ts0.orient[d] == ts0.orient[c] ^ o]
+            if cand:
+                pmap.setdefault(c, {})[o] = min(cand, key=lambda d: (d in areas, d))
+    mirror_all = {d for m in pmap.values() for d in m.values()}
+    areas_all = sorted(set(areas) | mirror_all)
     ts1 = ts0.derive(blank=del_cells + areas_all)
     pcls = sc["prot"]["classes"]
     keep_cells = set(sc["used"]) | {c for c in range(len(ts0.cells)) if ts0.cls[c] in pcls}
@@ -978,7 +980,7 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
                     "protectedOnly": len(pcls - sc["used_cls"]), "freeable": len(sc["groups"]),
                     "unusedClasses": len(sc["unused"]), "keepBefore": len(keep0), "keepAfter": len(keep1),
                     "leftover": ts1.count - len(keep1), "free": limit - len(keep1),
-                    "beyond": max(0, ts1.count - limit), "areas": len(areas), "mirrorAreas": len(set(pmap.values()) - set(areas)), "mirrorCells": sorted(set(pmap.values()) - set(areas)),
+                    "beyond": max(0, ts1.count - limit), "areas": len(areas), "mirrorAreas": len(mirror_all - set(areas)), "mirrorCells": sorted(mirror_all - set(areas)),
                     "usedInAreas": sum(1 for c in areas if c in sc["used"])}
     if out["tiles"]["usedInAreas"]:
         out["warnings"].append("%d используемых картой ячеек лежат в областях подмены: их содержимое будет перезаписано" % out["tiles"]["usedInAreas"])
@@ -1010,8 +1012,13 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
         left = len([p for p in new if p not in repl])
         repl = auto_compress(pic, ts1, new, repl, locked, len(repl) + max(0, left - max(0, free - extra)),
                              ac.get("existing", True), ac.get("new", True), sugg)
+    for pid_ in list(repl):
+        try:
+            resolve(pid_, repl, reuse)
+        except ValueError:                  # цикл замен: последнюю ручную замену отбрасываем, а не роняем весь план
+            del repl[pid_]
+            out["warnings"].append("замена %s отменена: она замкнула бы цепочку замен в цикл" % pid_)
     for pid_, r in repl.items():
-        resolve(pid_, repl, reuse)          # цикл замен -> ValueError
         if "d" not in r:                    # цена ручной замены
             tk = ts1.keys[int(r["to"][1:])] if r["to"].startswith("e") else pic.ts.keys[int(r["to"][1:])]
             r["d"] = tile_dist(pic.ts.keys[int(pid_[1:])], tk, r["o"])
@@ -1078,30 +1085,48 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
     conflicts = []
     if items and pmode == "holes":
         taken, abs_cells = set(), [None] * len(items)
-        # оригиналы - в область, их отражения по X - в ячейки, где лежали отражения прежних тайлов области
-        mir = {c: d for c, d in pmap.items() if c in aset and d in aset}
+        # оригиналы - в область, их отражения - в ячейки, где лежат отражения прежних тайлов области.
+        # В область (и в зеркальную часть) ничего другого не кладём: отражённые копии никогда не попадают в область оригиналов.
         groups = {}
         for n, it in enumerate(items):
             groups.setdefault(canon(it["key"]), []).append(n)
-        pairs_ = []
+        info = []                            # (база, [(вариант, o)])
         for ns in groups.values():
-            vx = [n for n in ns[1:] if items[n]["key"] == flip_key(items[ns[0]]["key"], 1)]
-            pairs_.append((ns[0], vx[0] if vx else None))
-        with_p = [c for c in areas if c in mir]
-        without = [c for c in areas if c in aset and c not in mir]
-        for b_, v_ in [p for p in pairs_ if p[1] is not None]:
-            c = next((c for c in with_p if c not in taken and mir[c] not in taken and mir[c] != c), None)
-            if c is not None:                 # у разных ячеек области отражение может быть общим - берём каждую ячейку один раз
-                abs_cells[b_], abs_cells[v_] = c, mir[c]
-                taken.update((c, mir[c]))
-        rest = [c for c in without + with_p if c not in taken]
-        for b_, v_ in [p for p in pairs_ if p[1] is None]:
-            rest = [c for c in rest if c not in taken]
-            if rest:
-                abs_cells[b_] = rest.pop(0)
+            vs = []
+            for n in ns[1:]:
+                o = next((o for o in (1, 2, 3) if items[n]["key"] == flip_key(items[ns[0]]["key"], o)), None)
+                if o is not None:
+                    vs.append((n, o))
+            info.append((ns[0], vs))
+        free_areas = [c for c in areas if c in aset]
+        for b_, vs in sorted([i for i in info if i[1]], key=lambda i: -len(i[1])):
+            best = None
+            for c in free_areas:
+                if c in taken:
+                    continue
+                got, used_ = [], {c}
+                for n, o in vs:
+                    d = pmap.get(c, {}).get(o)
+                    if d is not None and d in aset and d not in taken and d not in used_:
+                        got.append((n, d))
+                        used_.add(d)
+                if got and (best is None or len(got) > len(best[1])):
+                    best = (c, got)
+            if best:
+                c, got = best
+                abs_cells[b_] = c
+                taken.add(c)
+                for n, d in got:
+                    abs_cells[n] = d
+                    taken.add(d)
+        left = [c for c in free_areas if c not in taken]
+        left.sort(key=lambda c: bool(pmap.get(c)))          # сперва ячейки без отражений
+        for b_, _vs in info:
+            if abs_cells[b_] is None and left:
+                abs_cells[b_] = left.pop(0)
                 taken.add(abs_cells[b_])
-        free_cells = sorted(aset) + [c for c in range(len(ts0.cells))
-                                     if c not in aset and is_blank(ts1.keys[c]) and c not in refs and c not in roots]
+        free_cells = [c for c in range(len(ts0.cells))
+                      if c not in aset and is_blank(ts1.keys[c]) and c not in refs and c not in roots]
         tail = len(ts0.cells)
         for n in [n for run in runs_of(pic, items) for n in run if abs_cells[n] is None]:
             for c in free_cells:

@@ -236,6 +236,22 @@ class TpCoreTest(unittest.TestCase):
         pos = [tuple(p) for p in out["layout"]["pos"]]
         self.assertEqual(len(pos), len(set(pos)))
 
+    def test_variants_never_go_into_area_without_mirror(self):
+        sc = tpcore.scan(self.proj, "mts-t.bmp", ["map-t.tmx"])
+        ts = sc["ts"]
+        size = {}
+        for c in range(len(ts.cells)):
+            size[ts.cls[c]] = size.get(ts.cls[c], 0) + 1
+        area = [c for c in range(len(ts.cells)) if size[ts.cls[c]] == 1 and sc["status"][c] == "f"][:3]
+        self.assertEqual(len(area), 3)
+        rng = random.Random(5)
+        t = rnd_tile(rng)
+        pic = tpcore.add_pic("v.png", write_png(16, 8, join_cells([t, tpcore.flip_rgb(t, 1)], 2, 1)))
+        out = tpcore.plan(self.proj, {"bmp": "mts-t.bmp", "areas": area, "img": pic.id, "place": {"mode": "holes"}})
+        W = ts.tw
+        placed = [r * W + c for r, c in out["layout"]["pos"]]
+        self.assertEqual(sum(1 for c in placed if c in area), 1)       # оригинал - в область, отражение - нет
+
     def test_png_roundtrip_and_alpha(self):
         rgb = bytes(range(0, 192)) * 1
         w, h, back, padded = tpcore.load_image_bytes(write_png(8, 8, rgb))
