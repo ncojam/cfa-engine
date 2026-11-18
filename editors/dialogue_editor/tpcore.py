@@ -418,6 +418,39 @@ def bmp_maps(project, bmp):
 _USAGE = {}
 
 
+def _head(path, n=6000):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return f.read(n)
+
+
+def map_tileset_bmp(project, tmx):
+    """bmp, на который (через .tsx) ссылается первый тайлсет карты, или ''"""
+    res = stcore.paths(project)["resources"]
+    try:
+        m = re.search(r'<tileset\b[^>]*\bsource="([^"]+)"', _head(os.path.join(res, tmx)))
+        if not m:
+            return ""
+        t = re.search(r'<image\b[^>]*\bsource="([^"]+)"', _head(os.path.normpath(os.path.join(res, m.group(1)))))
+        return os.path.basename(t.group(1)) if t else ""
+    except OSError:
+        return ""
+
+
+def all_maps(project):
+    """все tmx из resources: [{tmx, bmp}] - bmp тайлсета по .tsx (для подсказки, выбор - за пользователем)"""
+    res = stcore.paths(project)["resources"]
+    return [{"tmx": f, "bmp": map_tileset_bmp(project, f)} for f in sorted(os.listdir(res)) if f.endswith(".tmx")]
+
+
+def default_maps(project, bmp):
+    """карты, предвыбранные для тайлсета: собираемые с ним по build_graphics.sh + ссылающиеся на него по .tsx"""
+    res = list(bmp_maps(project, bmp))
+    for m in all_maps(project):
+        if m["bmp"] == os.path.basename(bmp) and m["tmx"] not in res and not SKIP_MAP.search(m["tmx"]):
+            res.append(m["tmx"])
+    return res
+
+
 def protected_classes(project, ts, tmxs):
     """классы тайлов из диапазонов подмены (куда и откуда) пар, которые используют карты этого тайлсета"""
     info = {"pairs": [], "classes": set(), "errors": [], "ranges": []}
@@ -459,29 +492,34 @@ def blank_class(ts):
 
 
 def scan(project, bmp, tmxs, layer_sel=None, limit=stcore.VRAM_TILES):
+    """u - используется, p - нужен подмене, d - не используется, но копия/отражение используемого,
+    f - не используется. groups: корень класса -> его ячейки для ВСЕХ классов, которые можно снести
+    (кроме нужных подмене и прозрачного); используемые тоже: пользователь вправе убрать то, что карта
+    сейчас показывает (например старое здание)."""
     ts, _ = load_tileset(ts_path(project, bmp))
     used = used_cells(project, tmxs, layer_sel or {}, len(ts.cells))
     used_cls = {ts.cls[c] for c in used}
     prot = protected_classes(project, ts, tmxs)
-    keep_cls = set(used_cls) | prot["classes"]
     bc = blank_class(ts)
+    keep_cls = set(used_cls) | prot["classes"]
     if bc is not None:
         keep_cls.add(bc)
-    status = []
-    groups = {}
+    status, groups = [], {}
     for c in range(len(ts.cells)):
         k = ts.cls[c]
-        if c in used:
+        if k in prot["classes"]:
+            status.append("u" if c in used else "p")
+        elif c in used:
             status.append("u")
-        elif k in prot["classes"]:
-            status.append("p")
         elif k in used_cls or k == bc:
             status.append("d")
         else:
             status.append("f")
+        if k not in prot["classes"] and k != bc:
             groups.setdefault(k, []).append(c)
+    unused = [k for k, cells in groups.items() if k not in used_cls]
     return {"ts": ts, "used": used, "used_cls": used_cls, "prot": prot, "keep_cls": keep_cls, "blank": bc,
-            "status": "".join(status), "groups": groups, "limit": limit}
+            "status": "".join(status), "groups": groups, "unused": unused, "limit": limit}
 
 
 # ------------------------------------------------------------------ картинка
@@ -689,11 +727,15 @@ def auto_compress(pic, ts1, new, repl, locked, need, allow_existing=True, allow_
 
 # ------------------------------------------------------------------ итоговая картинка и содержимое ячеек
 
-def final_cells(pic, ts1, reuse, repl):
+def final_cells(pic, ts1, reuse, repl, skip=()):
     """для каждой ячейки картинки итоговое содержимое rgb (после замен) и признак «изменено»"""
     out, changed = [], 0
     for c in range(len(pic.ts.cells)):
         pid = "p%d" % pic.ts.cls[c]
+        if pid in skip:                      # неучтённый тайл: в тайлсет не идёт, на карте - пустая клетка
+            out.append(MAG_TILE)
+            changed += 1
+            continue
         t, o = resolve(pid, repl, reuse)
         p = pic.ts.orient[c]
         if t == pid and o == 0:
@@ -855,11 +897,28 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
     # --- шаги 1-2: удаление и место
     dele = [int(x) for x in P.get("delete") or [] if int(x) in sc["groups"]]
     del_cells = [c for r in dele for c in sc["groups"][r]]
-    ts1 = ts0.derive(blank=del_cells)
+    areas = sorted({int(c) for c in P.get("areas") or [] if 0 <= int(c) < len(ts0.cells)})
+    ts1 = ts0.derive(blank=del_cells + areas)
+    pcls = sc["prot"]["classes"]
+    keep_cells = set(sc["used"]) | {c for c in range(len(ts0.cells)) if ts0.cls[c] in pcls}
+
+    def keep_of(ts):
+        k = {ts.cls[c] for c in keep_cells}
+        b = blank_class(ts)
+        if b is not None:
+            k.add(b)
+        return k
+    keep0, keep1 = keep_of(ts0), keep_of(ts1)
+    skip = set(P.get("skip") or [])
     out["tiles"] = {"raw": len(ts0.cells), "opt": ts0.count, "optAfterDelete": ts1.count, "deleted": len(dele),
                     "deletedCells": len(del_cells), "displayed": len(sc["used_cls"]),
-                    "protectedOnly": len(sc["prot"]["classes"] - sc["used_cls"]),
-                    "freeable": len(sc["groups"]), "free": limit - ts1.count, "beyond": max(0, ts0.count - limit)}
+                    "protectedOnly": len(pcls - sc["used_cls"]), "freeable": len(sc["groups"]),
+                    "unusedClasses": len(sc["unused"]), "keepBefore": len(keep0), "keepAfter": len(keep1),
+                    "leftover": ts1.count - len(keep1), "free": limit - len(keep1),
+                    "beyond": max(0, ts1.count - limit), "areas": len(areas),
+                    "usedInAreas": sum(1 for c in areas if c in sc["used"])}
+    if out["tiles"]["usedInAreas"]:
+        out["warnings"].append("%d используемых картой ячеек лежат в областях подмены: их содержимое будет перезаписано" % out["tiles"]["usedInAreas"])
     out["pairs"] = sc["prot"]["pairs"]
     out["warnings"] += sc["prot"]["errors"]
     if sc["blank"] is None:
@@ -869,37 +928,57 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
         return out
     # --- шаг 3: картинка
     pic = get_pic(P["img"])
-    reuse, new = pic_state(pic, ts1)
-    repl = {k: v for k, v in (P.get("repl") or {}).items() if k in new}
+    reuse_all, new_all = pic_state(pic, ts1)
+    bk = blank_class(pic.ts)
+    skip = {p for p in skip if p in reuse_all or p in new_all}
+    reuse = {k: v for k, v in reuse_all.items() if k not in skip}
+    new = [p for p in new_all if p not in skip]
+    repl = {k: v for k, v in (P.get("repl") or {}).items() if k in new and v.get("to") not in skip}
     locked = set(P.get("locked") or [])
     ac = P.get("auto") or {}
-    free = limit - ts1.count
+    free = limit - len(keep1)
+    extra = len({(ts1.cls[ts1.exact[k]] if k in ts1.exact else ts1.flipmap[k][0]) for k in (pic.ts.keys[int(p[1:])] for p in reuse)
+                 if not is_blank(k)} - keep1)
     sugg = None
     if with_suggest or auto:
         sugg = suggest(pic, ts1, new, ac.get("existing", True), ac.get("new", True))
         out["suggest"] = sugg
     if auto:
         left = len([p for p in new if p not in repl])
-        repl = auto_compress(pic, ts1, new, repl, locked, len(repl) + max(0, left - free),
+        repl = auto_compress(pic, ts1, new, repl, locked, len(repl) + max(0, left - max(0, free - extra)),
                              ac.get("existing", True), ac.get("new", True), sugg)
     for pid_, r in repl.items():
         resolve(pid_, repl, reuse)          # цикл замен -> ValueError
         if "d" not in r:                    # цена ручной замены
             tk = ts1.keys[int(r["to"][1:])] if r["to"].startswith("e") else pic.ts.keys[int(r["to"][1:])]
             r["d"] = tile_dist(pic.ts.keys[int(pid_[1:])], tk, r["o"])
-    final, changed = final_cells(pic, ts1, reuse, repl)
+    final, changed = final_cells(pic, ts1, reuse, repl, skip)
     err_total, err_max = pic_error(pic, final)
     items = needed_cells(pic, ts1, final)
     # новых тайлов VRAM: классы нужных ячеек, которых ещё нет в наборе (зеркальные копии существующих - бесплатно)
-    need_tiles = len({canon(it["key"]) for it in items if it["key"] not in ts1.flipmap})
+    need_set = set()
+    for rgb in final:
+        k = rgb_key(rgb)
+        if is_blank(k):
+            continue
+        hit = ts1.flipmap.get(k)
+        if hit is None:
+            need_set.add(("n", canon(k)))
+        elif hit[0] not in keep1:
+            need_set.add(("e", hit[0]))
+    need_tiles = len(need_set)
     out["pic"] = {"id": pic.id, "name": pic.name, "w": pic.ts.tw, "h": pic.ts.th, "cells": len(pic.ts.cells),
                   "padded": pic.padded, "blankCells": sum(1 for k in pic.ts.keys if is_blank(k)),
                   "uniqueExact": len(set(pic.ts.keys)), "classes": len(pic.classes), "reused": len(reuse),
                   "new": len(new), "replaced": len(repl), "needTiles": need_tiles, "newCells": len(items),
                   "fits": need_tiles <= free, "overflow": max(0, need_tiles - free), "changedCells": changed,
+                  "skipped": len(skip), "free": free, "cellCls": list(pic.ts.cls),
                   "errTotal": err_total, "errMax": err_max,
                   "colors": len(colors_of(pic.ts.cells)), "newColors": len(colors_of(pic.ts.cells) - colors_of(ts1.cells))}
-    out["classes"] = [{"id": p, "cell": int(p[1:]), "count": pic.count[int(p[1:])]} for p in new]
+    out["classes"] = [{"id": p, "cell": int(p[1:]), "count": pic.count[int(p[1:])], "skip": p in skip}
+                      for p in new_all if p in new or p in skip]
+    out["picCls"] = [{"id": "p%d" % r, "cell": r, "count": pic.count[r], "reuse": ("p%d" % r) in reuse_all,
+                      "skip": ("p%d" % r) in skip, "blank": r == bk} for r in pic.classes]
     out["reuse"] = {k: {"to": v[0], "o": v[1]} for k, v in reuse.items()}
     out["repl"] = repl
     # --- шаг 4-5: раскладка и размещение
@@ -915,10 +994,14 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
     refs = used_cells(project, tmxs, {}, len(ts0.cells), all_layers=True) if items else set()
     roots = set(ts1.opt_root)
     prot, ranges = sc["prot"]["classes"], sc["prot"]["ranges"]
+    bl_root = blank_class(ts1)
+    aset = set(areas) - {bl_root}
 
     def usable(a, key):
         """в ячейку a можно положить тайл key: она пуста и не нужна, не лежит внутри диапазона подмены и
         (для отражённой копии защищённого тайла) не раньше его корня - иначе корень перевернётся"""
+        if a in aset:                        # область подмены: можно писать в любую (кроме корня прозрачного тайла)
+            return True
         if a < len(ts0.cells) and (not is_blank(ts1.keys[a]) or a in refs or a in roots):
             return False
         if any(lo <= a <= hi for lo, hi in ranges):
@@ -928,7 +1011,8 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
 
     conflicts = []
     if items and pmode == "holes":
-        free_cells = [c for c in range(len(ts0.cells)) if is_blank(ts1.keys[c]) and c not in refs and c not in roots]
+        free_cells = sorted(aset) + [c for c in range(len(ts0.cells))
+                                     if c not in aset and is_blank(ts1.keys[c]) and c not in refs and c not in roots]
         taken, abs_cells = set(), [None] * len(items)
         tail = len(ts0.cells)
         for n in [n for run in runs_of(pic, items) for n in run]:
@@ -948,8 +1032,10 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
                      "pos": [[a // ts0.tw, a % ts0.tw] for a in abs_cells], "conflicts": conflicts}
     ts2 = None if conflicts else ts1.derive(put={a: items[n]["rgb"] for n, a in enumerate(abs_cells)}, new_th=new_th)
     out["_pic"], out["_final"], out["_items"], out["_ts2"] = pic, final, items, ts2
+    conflict_msg = None
     if ts2 is None:
-        out["errors"].append("%d ячеек выбранного участка заняты (не пустые, нужны карте или корень тайла) - выберите другое место" % len(conflicts))
+        conflict_msg = "%d ячеек выбранного участка заняты (не пустые, нужны карте или корень тайла) - выберите другое место" % len(conflicts)
+        out["errors"].append(conflict_msg)
     else:
         shown = {ts2.cls[c] for c in used_cells(project, tmxs, P.get("layers") or {}, len(ts0.cells))}
         for rgb in final:
@@ -965,9 +1051,14 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
             out["result"]["pairEdits"] = len(edits)
             out["errors"] += errs
         if over:
-            out["errors"].append("%d тайлов карты/картинки окажутся за пределом VRAM (%d): сожмите сильнее или освободите место" % (len(over), limit))
+            hint = (" (по карте всё помещается - удалите оставшиеся неиспользуемые тайлы: %d шт. или отметьте области подмены)" % out["tiles"]["leftover"]
+                    if need_tiles <= free else ": сожмите сильнее, пометьте неучтённые или освободите место")
+            out["errors"].append("%d тайлов карты/картинки окажутся за пределом VRAM (%d)%s" % (len(over), limit, hint))
         if cols > 256:
             out["errors"].append("в тайлсете получится %d цветов (максимум 256 - иначе tmx2incl откажется собирать)" % cols)
+    if (P.get("target") or {}).get("mode") == "copy":      # отдельная копия: основной тайлсет не трогаем, проверки - подсказки
+        out["warnings"] += [e for e in out["errors"] if e != conflict_msg]
+        out["errors"] = [e for e in out["errors"] if e == conflict_msg]
     if images:
         out["images"] = {"final": png_b64(pic.w, pic.h, join_cells(final, pic.ts.tw, pic.ts.th)),
                          "after": png_b64(ts2.tw * T, ts2.th * T, join_cells(ts2.cells, ts2.tw, ts2.th)) if ts2 else None}
@@ -980,8 +1071,9 @@ def public(out):
 
 # ------------------------------------------------------------------ запись
 
-def update_tsx(project, bmp, tw, th, force=None):
-    """размеры картинки и tilecount в .tsx, который смотрит на этот bmp -> (путь|None, новый текст)"""
+def update_tsx(project, bmp, tw, th, force=None, image=None, name=None):
+    """размеры картинки и tilecount в .tsx, который смотрит на этот bmp -> (путь|None, новый текст);
+    image/name - переписать источник картинки и имя тайлсета (для копии)"""
     res = stcore.paths(project)["resources"]
     for f in sorted(os.listdir(res)):
         if not f.endswith(".tsx"):
@@ -994,55 +1086,117 @@ def update_tsx(project, bmp, tw, th, force=None):
             new = re.sub(r'(<image\b[^>]*\bwidth=")\d+(")', lambda x: x.group(1) + str(tw * T) + x.group(2), text, count=1)
             new = re.sub(r'(<image\b[^>]*\bheight=")\d+(")', lambda x: x.group(1) + str(th * T) + x.group(2), new, count=1)
             new = re.sub(r'(<tileset\b[^>]*\btilecount=")\d+(")', lambda x: x.group(1) + str(tw * th) + x.group(2), new, count=1)
+            if image:
+                new = re.sub(r'(<image\b[^>]*\bsource=")[^"]*(")', lambda x: x.group(1) + image + x.group(2), new, count=1)
+            if name:
+                new = re.sub(r'(<tileset\b[^>]*\bname=")[^"]*(")', lambda x: x.group(1) + name + x.group(2), new, count=1)
             return p, new
     return None, ""
 
 
+def minimal_tsx(name, image, tw, th):
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<tileset version="1.10" tiledversion="1.12.2" name="%s" tilewidth="8" tileheight="8" tilecount="%d" columns="%d">\n'
+            ' <image source="%s" trans="ff00ff" width="%d" height="%d"/>\n</tileset>\n') % (name, tw * th, tw, image, tw * T, th * T)
+
+
+def _safe_name(n, default):
+    return re.sub(r"[^\w\-]+", "_", n or "") or default
+
+
+def _abs(project, d):
+    return d if os.path.isabs(d) else os.path.join(project, d)
+
+
 def apply(project, here, P):
-    """записать bmp (+ supertiles.cpp, .tsx) с бэкапом: удаления и размещение за один раз"""
+    """записать bmp (+ supertiles.cpp, .tsx). main: в основной тайлсет с бэкапом; copy: отдельные файлы
+    <dir>/<name>.bmp|.tsx (+ supertiles.cpp), основной тайлсет не трогаем"""
     out = plan(project, P)
     ts0, ts2 = out["_ts0"], out["_ts2"]
     if P.get("img") and ts2 is out["_ts1"]:
         raise ValueError("не посчитано размещение картинки")
+    if ts2 is None:
+        raise ValueError("; ".join(out["errors"]))
+    tg = P.get("target") or {}
+    copy = tg.get("mode") == "copy"
     if out["errors"] and not P.get("force"):
         raise ValueError("; ".join(out["errors"]))
-    if not P.get("img") and not out["tiles"]["deleted"]:
+    if not P.get("img") and not out["tiles"]["deleted"] and not out["tiles"]["areas"] and not copy:
         raise ValueError("нечего применять: ничего не выбрано")
-    path = ts_path(project, P["bmp"])
-    _, b0 = load_tileset(path)
+    src = ts_path(project, P["bmp"])
+    _, b0 = load_tileset(src)
     text, edits, perrs = pair_edits(project, ts0, ts2, out["pairs"]) if out["pairs"] else ("", [], [])
-    if perrs and not P.get("force"):
+    if perrs and not (P.get("force") or copy):
         raise ValueError("; ".join(perrs))
-    bdir = os.path.join(here, "backups", "tilepack", time.strftime("%Y%m%d_%H%M%S"))
-    os.makedirs(bdir, exist_ok=True)
-    shutil.copy2(path, os.path.join(bdir, os.path.basename(path)))
-    table = stcore.paths(project)["table"]
-    if os.path.isfile(table):
-        shutil.copy2(table, os.path.join(bdir, os.path.basename(table)))
-    ts2.to_bmp(b0.header).save(path)
-    msgs = ["%s записан: %d x %d тайлов, в сжатом наборе %d" % (os.path.basename(path), ts2.tw, ts2.th, ts2.count)]
-    if edits:
-        with open(table, "w", encoding="utf-8", newline="\n") as f:
-            f.write(stcore.save_table(text, edits))
-        msgs.append("supertiles.cpp: пересчитаны пары %s" % ", ".join(str(e["idx"]) for e in edits))
-        stcore.refresh_usage(project)
-    if (ts2.tw, ts2.th) != (ts0.tw, ts0.th):
-        tp, new = update_tsx(project, P["bmp"], ts2.tw, ts2.th, os.path.basename(P.get("tsx") or "") or None)
-        if tp:
-            shutil.copy2(tp, os.path.join(bdir, os.path.basename(tp)))
-            with open(tp, "w", encoding="utf-8", newline="") as f:
-                f.write(new)
-            msgs.append("%s: размер картинки и tilecount обновлены" % os.path.basename(tp))
+    here_tp = os.path.join(here, "backups", "tilepack")
+    os.makedirs(here_tp, exist_ok=True)
+    msgs, info = [], {}
+    if copy:
+        odir = _abs(project, tg.get("dir") or os.path.join("resources", "tilepack_out"))
+        name = _safe_name(tg.get("name"), os.path.splitext(os.path.basename(src))[0] + "_new")
+        os.makedirs(odir, exist_ok=True)
+        path = os.path.join(odir, name + ".bmp")
+        ts2.to_bmp(b0.header).save(path)
+        msgs.append("копия тайлсета: %s (%d x %d тайлов, в сжатом наборе %d); основной %s не тронут"
+                    % (path, ts2.tw, ts2.th, ts2.count, os.path.basename(src)))
+        tp, txt = update_tsx(project, P["bmp"], ts2.tw, ts2.th, os.path.basename(P.get("tsx") or "") or None,
+                             image=name + ".bmp", name=name)
+        if not tp:
+            txt = minimal_tsx(name, name + ".bmp", ts2.tw, ts2.th)
+            msgs.append("подходящего .tsx не нашлось - записан минимальный (без wangset и свойств)")
+        tsx_path = os.path.join(odir, name + ".tsx")
+        with open(tsx_path, "w", encoding="utf-8", newline="") as f:
+            f.write(txt)
+        msgs.append("%s: копия описания тайлсета%s" % (tsx_path, " (wangsets, свойства сохранены)" if tp else ""))
+        if edits:
+            with open(os.path.join(odir, "supertiles.cpp"), "w", encoding="utf-8", newline="\n") as f:
+                f.write(stcore.save_table(text, edits))
+            msgs.append("supertiles.cpp (копия с пересчитанными парами %s) в %s - рабочий supertiles.cpp не тронут"
+                        % (", ".join(str(e["idx"]) for e in edits), odir))
+        for e in perrs:
+            msgs.append("предупреждение: " + e)
+        info = {"bmp": path, "tsx": tsx_path, "dir": odir, "name": name, "copy": True}
+        bdir = odir
+    else:
+        path = src
+        bdir = os.path.join(here_tp, time.strftime("%Y%m%d_%H%M%S"))
+        os.makedirs(bdir, exist_ok=True)
+        shutil.copy2(path, os.path.join(bdir, os.path.basename(path)))
+        table = stcore.paths(project)["table"]
+        if os.path.isfile(table):
+            shutil.copy2(table, os.path.join(bdir, os.path.basename(table)))
+        ts2.to_bmp(b0.header).save(path)
+        msgs.append("%s записан: %d x %d тайлов, в сжатом наборе %d" % (os.path.basename(path), ts2.tw, ts2.th, ts2.count))
+        if edits:
+            with open(table, "w", encoding="utf-8", newline="\n") as f:
+                f.write(stcore.save_table(text, edits))
+            msgs.append("supertiles.cpp: пересчитаны пары %s" % ", ".join(str(e["idx"]) for e in edits))
+            stcore.refresh_usage(project)
+        tsx_path = ""
+        if (ts2.tw, ts2.th) != (ts0.tw, ts0.th):
+            tp, new = update_tsx(project, P["bmp"], ts2.tw, ts2.th, os.path.basename(P.get("tsx") or "") or None)
+            if tp:
+                shutil.copy2(tp, os.path.join(bdir, os.path.basename(tp)))
+                with open(tp, "w", encoding="utf-8", newline="") as f:
+                    f.write(new)
+                tsx_path = tp
+                msgs.append("%s: размер картинки и tilecount обновлены" % os.path.basename(tp))
+            else:
+                msgs.append("ни один .tsx не ссылается на %s - размер тайлсета в Tiled обновите сами" % P["bmp"])
         else:
-            msgs.append("ни один .tsx не ссылается на %s - размер тайлсета в Tiled обновите сами" % P["bmp"])
+            tp, _ = update_tsx(project, P["bmp"], ts2.tw, ts2.th, os.path.basename(P.get("tsx") or "") or None)
+            tsx_path = tp or ""
+        info = {"bmp": path, "tsx": tsx_path, "dir": "", "name": "", "copy": False}
+        msgs.append("бэкап (старый bmp и supertiles.cpp со старой разметкой): %s" % bdir)
     if P.get("img"):     # итоговая картинка нужна для шага 6 (после записи «замены» уже не восстановить)
         pic, final = out["_pic"], out["_final"]
         png = write_png(pic.w, pic.h, join_cells(final, pic.ts.tw, pic.ts.th))
-        for p in (os.path.join(bdir, "final.png"), os.path.join(here, "backups", "tilepack", "last_final.png")):
+        for p in {os.path.join(bdir, "final.png"), os.path.join(here_tp, "last_final.png")}:
             with open(p, "wb") as f:
                 f.write(png)
-    msgs.append("бэкап (старый bmp и supertiles.cpp со старой разметкой): %s" % bdir)
-    return {"ok": True, "messages": msgs, "backup": bdir}
+    with open(os.path.join(here_tp, "last.json"), "w", encoding="utf-8") as f:
+        json.dump(info, f, ensure_ascii=False)
+    return {"ok": True, "messages": msgs, "backup": bdir if not copy else "", "target": info}
 
 
 # ------------------------------------------------------------------ tmx с готовым зданием
@@ -1055,7 +1209,17 @@ def export_tmx(project, here, P):
     with open(src_png, "rb") as f:
         w, h, rgb = read_png(f.read())
     cells = split_cells(w, h, rgb)
-    ts, _ = load_tileset(ts_path(project, P["bmp"]))
+    last = {}
+    lj = os.path.join(here, "backups", "tilepack", "last.json")
+    if os.path.isfile(lj) and not P.get("bmpPath"):
+        try:
+            with open(lj, encoding="utf-8") as f:
+                last = json.load(f)
+        except (OSError, ValueError):
+            last = {}
+    bmp_file = P.get("bmpPath") or last.get("bmp") or ts_path(project, P["bmp"])
+    tsx_file = P.get("tsxPath") or last.get("tsx") or ""
+    ts, _ = load_tileset(bmp_file)
     gids, missing = [], 0
     for c in cells:
         k = rgb_key(c)
@@ -1067,17 +1231,16 @@ def export_tmx(project, here, P):
             gids.append(0)
             missing += 1
     if missing:
-        raise ValueError("%d тайлов картинки не нашлись в %s - bmp изменился после шага 5?" % (missing, P["bmp"]))
+        raise ValueError("%d тайлов картинки не нашлись в %s - bmp изменился после шага 5?" % (missing, os.path.basename(bmp_file)))
     res = stcore.paths(project)["resources"]
-    odir = P.get("outDir") or os.path.join("resources", "tilepack_out")
-    if not os.path.isabs(odir):
-        odir = os.path.join(project, odir)
+    odir = _abs(project, P.get("outDir") or last.get("dir") or os.path.join("resources", "tilepack_out"))
     os.makedirs(odir, exist_ok=True)
     name = re.sub(r"[^\w\-]+", "_", P.get("name") or "building") or "building"
     layer = re.sub(r'[<>&"]', "", P.get("layer") or "building")
-    tsx = os.path.basename(P.get("tsx") or os.path.splitext(os.path.basename(P["bmp"]))[0] + ".tsx")
+    tsx_abs = tsx_file or os.path.join(res, os.path.basename(P.get("tsx") or os.path.splitext(os.path.basename(P["bmp"]))[0] + ".tsx"))
+    tsx = os.path.basename(tsx_abs)
     tw, th = w // T, h // T
-    src = os.path.relpath(os.path.join(res, tsx), odir).replace("\\", "/")
+    src = os.path.relpath(tsx_abs, odir).replace("\\", "/")
     body = ",\n".join(",".join(str(g) for g in gids[y * tw:(y + 1) * tw]) for y in range(th))
     xml = ('<?xml version="1.0" encoding="UTF-8"?>\n'
            '<map version="1.10" tiledversion="1.12.2" orientation="orthogonal" renderorder="right-down" width="%d" height="%d" '
@@ -1091,6 +1254,6 @@ def export_tmx(project, here, P):
     png_path = os.path.join(odir, name + "_compressed.png")
     shutil.copyfile(src_png, png_path)
     msgs = ["tmx: %s (%d x %d тайлов, слой «%s»)" % (tmx_path, tw, th, layer)]
-    if not os.path.isfile(os.path.join(res, tsx)):
-        msgs.append("тайлсет %s не найден в resources - поправьте путь в tmx" % tsx)
+    if not os.path.isfile(tsx_abs):
+        msgs.append("тайлсет %s не найден - поправьте путь в tmx" % tsx_abs)
     return {"ok": True, "tmx": tmx_path, "png": png_path, "messages": msgs}

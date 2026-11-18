@@ -104,7 +104,7 @@ class TpCoreTest(unittest.TestCase):
         path = os.path.join(self.proj, "images", "mts-t.bmp")
         before = stcore.compress_tileset(path)
         sc = tpcore.scan(self.proj, "mts-t.bmp", ["map-t.tmx"])
-        res = tpcore.apply(self.proj, self.here, {"bmp": "mts-t.bmp", "delete": list(sc["groups"])})
+        res = tpcore.apply(self.proj, self.here, {"bmp": "mts-t.bmp", "delete": list(sc["unused"])})
         after = stcore.compress_tileset(path)
         self.assertLess(after["optCount"], before["optCount"])
         self.assertTrue(os.path.isdir(res["backup"]))
@@ -132,9 +132,9 @@ class TpCoreTest(unittest.TestCase):
             r = rng.random()
             cells.append(MAG_TILE if i < 4 else (tpcore.flip_rgb(ts.cells[rng.randrange(20)], rng.randrange(4)) if r < .3 else rnd_tile(rng)))
         pic = tpcore.add_pic("p.png", write_png(64, 48, join_cells(cells, 8, 6)))
-        free_now = 864 - tpcore.plan(self.proj, {"bmp": "mts-t.bmp", "delete": list(sc["groups"])})["_ts1"].count
+        free_now = 864 - tpcore.plan(self.proj, {"bmp": "mts-t.bmp", "delete": list(sc["unused"])})["_ts1"].count
         limit = 864 - free_now + 12                      # ровно 12 свободных тайлов
-        P = {"bmp": "mts-t.bmp", "delete": list(sc["groups"]), "img": pic.id, "limit": limit, "place": {"mode": "holes"}}
+        P = {"bmp": "mts-t.bmp", "delete": list(sc["unused"]), "img": pic.id, "limit": limit, "place": {"mode": "holes"}}
         out = tpcore.plan(self.proj, P, auto=True)
         self.assertEqual(out["errors"], [])
         self.assertLessEqual(out["pic"]["needTiles"], 12)
@@ -150,6 +150,46 @@ class TpCoreTest(unittest.TestCase):
         self.assertEqual(len(gids), 48)
         for g, f in zip(gids, final):
             self.assertEqual(rgb_key(MAG_TILE if g == 0 else bmp_cells[g - 1]), rgb_key(f))
+
+    def _pic(self, n=24, seed=3):
+        rng = random.Random(seed)
+        cells = [rnd_tile(rng) for _ in range(n)]
+        return tpcore.add_pic("q.png", write_png(8 * n, 8, join_cells(cells, n, 1)))
+
+    def test_used_delete_skip_and_by_map_capacity(self):
+        sc = tpcore.scan(self.proj, "mts-t.bmp", ["map-t.tmx"])
+        used_root = next(iter(sc["used_cls"] - {sc["blank"]}))
+        self.assertIn(used_root, sc["groups"])            # используемые тоже можно удалять
+        o0 = tpcore.plan(self.proj, {"bmp": "mts-t.bmp"})["tiles"]
+        o1 = tpcore.plan(self.proj, {"bmp": "mts-t.bmp", "delete": [used_root]})["tiles"]
+        self.assertEqual(o1["keepAfter"], o0["keepAfter"] - 1)
+        self.assertEqual(o0["free"], 864 - o0["keepAfter"])
+        pic = self._pic()
+        a = tpcore.plan(self.proj, {"bmp": "mts-t.bmp", "img": pic.id})
+        cls = a["picCls"]
+        skip = [c["id"] for c in cls[:5] if not c["blank"]]
+        b = tpcore.plan(self.proj, {"bmp": "mts-t.bmp", "img": pic.id, "skip": skip})
+        self.assertEqual(b["pic"]["needTiles"], a["pic"]["needTiles"] - len(skip))
+        self.assertEqual(b["pic"]["skipped"], len(skip))
+
+    def test_areas_copy_target_and_export(self):
+        sc = tpcore.scan(self.proj, "mts-t.bmp", ["map-t.tmx"])
+        area = [c for c in range(len(sc["ts"].cells)) if sc["status"][c] == "u"][:6]
+        pic = self._pic(6, 5)
+        P = {"bmp": "mts-t.bmp", "areas": area, "img": pic.id, "place": {"mode": "holes"},
+             "target": {"mode": "copy", "name": "mycopy", "dir": os.path.join(self.tmp.name, "cp")}}
+        out = tpcore.plan(self.proj, P)
+        self.assertEqual(out["errors"], [])
+        self.assertTrue(set(a for r, c in out["layout"]["pos"] for a in [r * 16 + c]) <= set(area) | set(range(1000)))
+        orig = open(os.path.join(self.proj, "images", "mts-t.bmp"), "rb").read()
+        res = tpcore.apply(self.proj, self.here, P)
+        self.assertEqual(orig, open(os.path.join(self.proj, "images", "mts-t.bmp"), "rb").read())   # основной не тронут
+        self.assertTrue(os.path.isfile(os.path.join(self.tmp.name, "cp", "mycopy.bmp")))
+        tsx = open(os.path.join(self.tmp.name, "cp", "mycopy.tsx"), encoding="utf-8").read()
+        self.assertIn('source="mycopy.bmp"', tsx)
+        ex = tpcore.export_tmx(self.proj, self.here, {"bmp": "mts-t.bmp", "name": "b"})
+        self.assertTrue(ex["tmx"].startswith(os.path.join(self.tmp.name, "cp")))
+        self.assertIn('source="mycopy.tsx"', open(ex["tmx"], encoding="utf-8").read())
 
     def test_png_roundtrip_and_alpha(self):
         rgb = bytes(range(0, 192)) * 1

@@ -963,15 +963,17 @@ def api_missions_save(body):
 def _tp_payload(body):
     P = dict(body)
     P['bmp'] = _safe_name(P.get('bmp'), '.bmp')
-    P['maps'] = [_safe_name(m, '.tmx') for m in (P.get('maps') or tpcore.bmp_maps(CFG['project'], P['bmp']))]
+    P['maps'] = [_safe_name(m, '.tmx') for m in (P.get('maps') or tpcore.default_maps(CFG['project'], P['bmp']))]
+    if P.get('target') and P['target'].get('dir') is not None and not isinstance(P['target']['dir'], str):
+        raise ValueError('bad target')
     return P
 
 
 def api_tp_state():
     proj = CFG['project']
-    sets = [{"bmp": t['bmp'], "used": t['used'], "maps": tpcore.bmp_maps(proj, t['bmp'])}
+    sets = [{"bmp": t['bmp'], "used": t['used'], "maps": tpcore.default_maps(proj, t['bmp'])}
             for t in stcore.list_tilesets(proj)]
-    return {"tilesets": sets, "limit": stcore.VRAM_TILES, "outDir": "resources/tilepack_out"}
+    return {"tilesets": sets, "allMaps": tpcore.all_maps(proj), "limit": stcore.VRAM_TILES, "outDir": "resources/tilepack_out"}
 
 
 def api_tp_scan(body):

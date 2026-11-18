@@ -580,3 +580,7 @@ body:not(.tab-dialogs) #sidebar,body:not(.tab-dialogs) #issuesBadge,body:not(.ta
 .tp-log{font-family:var(--mono);font-size:12px;background:var(--panel);border:1px solid var(--line2);border-radius:var(--r);padding:6px 10px;color:var(--muted);word-break:break-all}
 .tp-busy .tp-body{opacity:.55}
 .tp-picking{outline:2px dashed var(--accent2)}
+.tp-crow.skip{opacity:.55;background:#2a1b1b}
+.tp-pick{align-self:flex-end;border:1px solid var(--line);border-radius:var(--r);padding:2px 8px;position:relative}
+.tp-pick summary{cursor:pointer}
+.tp-maplist{display:flex;flex-direction:column;max-height:260px;overflow:auto;padding:4px 0}
