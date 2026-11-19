@@ -273,6 +273,31 @@ class TpCoreTest(unittest.TestCase):
                 if x and not tpcore.is_blank(ts0.keys[x - 1]):
                     self.assertEqual(ts0.keys[x - 1], ts1.keys[y - 1])
 
+    def test_repair_maps_after_compact(self):
+        sc = tpcore.scan(self.proj, "mts-t.bmp", ["map-t.tmx"])
+        P = {"bmp": "mts-t.bmp", "maps": ["map-t.tmx"], "delete": list(sc["unused"]), "compact": True, "compactFrom": 0}
+        res = os.path.join(self.proj, "resources", "map-t.tmx")
+        orig = open(res, encoding="utf-8", newline="").read()
+        old, _ = tpcore.load_tileset(tpcore.ts_path(self.proj, "mts-t.bmp"))
+        r = tpcore.apply(self.proj, self.here, P)
+        if not r["backup"] or not os.path.isfile(os.path.join(r["backup"], "compact.json")):
+            self.skipTest("в синтетике нечего сжимать")
+        for use_json in (True, False):
+            open(res, "w", encoding="utf-8", newline="").write(orig)      # «карту не пересчитали»
+            tpcore._MAP_CACHE.clear()
+            if not use_json:
+                os.rename(os.path.join(r["backup"], "compact.json"), os.path.join(r["backup"], "compact.bak"))
+            bname = os.path.basename(r["backup"])
+            rep = tpcore.repair_maps(self.proj, self.here, bname, "mts-t.bmp", ["map-t.tmx"], write=True)
+            item = [m for m in rep["maps"] if m["tmx"] == "map-t.tmx"][0]
+            self.assertTrue(item["needs"] or item["okNow"] == item["okAfter"])
+            tpcore._MAP_CACHE.clear()
+            new, _ = tpcore.load_tileset(tpcore.ts_path(self.proj, "mts-t.bmp"))
+            for l, l0 in zip(tpcore.read_layers(res)[0], tpcore.read_layers_text(orig)):
+                for y, x in zip(l["gids"], l0):
+                    if x and not tpcore.is_blank(old.keys[x - 1]) and not tpcore.is_blank(new.keys[y - 1]):
+                        self.assertEqual(old.keys[x - 1], new.keys[y - 1])
+
     def test_png_roundtrip_and_alpha(self):
         rgb = bytes(range(0, 192)) * 1
         w, h, back, padded = tpcore.load_image_bytes(write_png(8, 8, rgb))

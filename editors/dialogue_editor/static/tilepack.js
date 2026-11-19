@@ -12,7 +12,7 @@ const TPK = {
   areas: new Set(), skip: new Set(), compact: true, compactFrom: 5, mode1: 'del', target: { mode: 'copy', name: '', dir: 'resources/tilepack_out' },
   plan: null, pick: null, zoom: store.get('tpk.zoom', 2), showD: false, rows: 40, filter: 'all',
   export: { name: 'building', layer: 'building', outDir: 'resources/tilepack_out', tsx: '' },
-  busy: false, again: false, log: [], timer: null, el: {},
+  rep: { backups: null, pick: '', res: null, bmp: '' }, busy: false, again: false, log: [], timer: null, el: {},
 };
 
 const tpkNum = n => (n == null ? '-' : String(n));
@@ -35,7 +35,8 @@ function tpkBuild(root) {
   e.c4 = card(4, 'Сжатие'); e.b4 = h('div', { class: 'tp-body' }); e.c4.append(e.b4);
   e.c5 = card(5, 'Размещение и запись в bmp'); e.b5 = h('div', { class: 'tp-body' }); e.c5.append(e.b5);
   e.c6 = card(6, 'Карта (tmx) со зданием'); e.b6 = h('div', { class: 'tp-body' }); e.c6.append(e.b6);
-  root.append(h('div', { class: 'tp-main' }, e.head, e.c1, e.c2, e.c3, e.c4, e.c5, e.c6));
+  e.c7 = card(7, 'Починить карты после сжатия строк'); e.b7 = h('div', { class: 'tp-body' }); e.c7.append(e.b7);
+  root.append(h('div', { class: 'tp-main' }, e.head, e.c1, e.c2, e.c3, e.c4, e.c5, e.c6, e.c7));
 }
 
 async function tpkInit() {
@@ -197,7 +198,7 @@ function tpkCellAt(ev, cv, z, tw) {
 // ------------------------------------------------------------------ отрисовка шагов
 
 function tpkRenderAll() {
-  tpkRenderHead(); tpkRender1(); tpkRender2(); tpkRender3(); tpkRender4(); tpkRender5(); tpkRender6();
+  tpkRenderHead(); tpkRender1(); tpkRender2(); tpkRender3(); tpkRender4(); tpkRender5(); tpkRender6(); tpkRender7();
 }
 
 function tpkBtn(label, fn, cls = '', title = '') {
@@ -550,7 +551,7 @@ async function tpkApplyDelete() {
   if (!confirm(msg)) return;
   try {
     const r = await api('/api/tilepack/apply', Object.assign(tpkPayload(false), { areas: [], target: { mode: 'main' } }));
-    TPK.log = r.messages; toast('Готово: ' + r.messages[0]);
+    TPK.log = r.messages; TPK.rep.bmp = ''; toast('Готово: ' + r.messages[0]);
     TPK.sel = new Set(); await tpkScan();
   } catch (err) { toast(err.message, 'err'); }
 }
@@ -568,7 +569,7 @@ async function tpkApply() {
       TPK.export.outDir = r.target.dir;
       tpkRender5(); tpkRender6();
     } else {
-      TPK.sel = new Set(); TPK.areas = new Set(); TPK.repl = {}; TPK.sugg = null;
+      TPK.rep.bmp = ''; TPK.sel = new Set(); TPK.areas = new Set(); TPK.repl = {}; TPK.sugg = null;
       await tpkScan();
       TPK.log = r.messages; tpkRender5();
     }
@@ -580,5 +581,44 @@ async function tpkExport() {
     const r = await api('/api/tilepack/export', Object.assign({ bmp: TPK.bmp }, TPK.export, { tsx: TPK.export.tsx || undefined }));
     toast('tmx сохранён');
     TPK.el.b6.append(h('div', { class: 'tp-log' }, ...r.messages.map(m => h('div', null, m))));
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+
+// ------------------------------------------------------------------ шаг 7: починка карт, не пересчитанных при сжатии
+
+async function tpkRender7() {
+  const b = TPK.el.b7, R = TPK.rep; if (!TPK.bmp) return;
+  if (R.bmp !== TPK.bmp) {
+    R.bmp = TPK.bmp; R.res = null; R.pick = '';
+    try { R.backups = (await api('/api/tilepack/backups?bmp=' + encodeURIComponent(TPK.bmp))).backups; } catch (err) { R.backups = []; }
+    if (R.backups.length) R.pick = (R.backups.find(x => x.compact) || R.backups[0]).name;
+  }
+  const bk = R.backups || [];
+  const sel = h('select', { onchange: ev => { R.pick = ev.target.value; R.res = null; tpkRender7(); } },
+    ...bk.map(x => h('option', { value: x.name, selected: x.name === R.pick }, x.name + (x.compact ? '' : '  (без compact.json)') + (x.maps.length ? '  - карт: ' + x.maps.length : ''))));
+  const rows = [];
+  if (R.res) {
+    rows.push(h('div', { class: 'tl-hint' }, 'Убрано строк при сжатии: ' + R.res.removedRows + (R.res.backupOfFixed ? '. Исправленные карты: старые копии в ' + R.res.backupOfFixed : '')));
+    for (const m of R.res.maps) {
+      const st = m.error ? m.error : m.alreadyDone ? 'уже пересчитана при сжатии' : m.needs ? 'сломана: совпадает ' + m.okNow + ' из ' + m.cells + ', после починки ' + m.okAfter + (m.fixed ? '  → ИСПРАВЛЕНА' : '') : 'в порядке (' + m.okNow + ' из ' + m.cells + ')';
+      rows.push(h('div', { class: m.needs && !m.fixed ? 'tp-warn' : 'tp-map' }, h('b', null, m.tmx), ' ', st));
+    }
+  }
+  b.replaceChildren(
+    h('div', { class: 'tl-hint' }, 'Если при сжатии были карты, которые используют этот же тайлсет, но не были отмечены, их индексы остались старыми и графика сломалась. Выберите папку backups/tilepack/… от нужного сжатия (там старый bmp): редактор сравнит старую и новую раскладку и пересчитает индексы только в тех картах, где это реально улучшает совпадение.'),
+    bk.length ? h('div', { class: 'tp-row' }, tpkField('Бэкап (до сжатия)', sel),
+      tpkBtn('Проверить', () => tpkRepair(true), '', 'ничего не меняет, показывает какие карты сломаны'),
+      tpkBtn('Починить сломанные карты', () => tpkRepair(false), 'primary', 'перед правкой копии карт уходят в backups/tilepack/repair_*')) : h('div', { class: 'tp-warn' }, 'В backups/tilepack/ нет бэкапов с ' + TPK.bmp),
+    ...rows);
+}
+
+async function tpkRepair(dry) {
+  const R = TPK.rep;
+  if (!dry && !confirm('Пересчитать индексы тайлов в сломанных картах по бэкапу «' + R.pick + '»? Копии карт сохранятся в backups/tilepack/repair_*.')) return;
+  try {
+    R.res = await api('/api/tilepack/repair', { backup: R.pick, bmp: TPK.bmp, dry });
+    if (!dry) toast('карты исправлены: ' + R.res.maps.filter(m => m.fixed).length);
+    tpkRender7();
   } catch (err) { toast(err.message, 'err'); }
 }

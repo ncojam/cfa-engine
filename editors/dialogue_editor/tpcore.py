@@ -375,6 +375,11 @@ def read_layers(path):
     return _MAP_CACHE[key]
 
 
+def read_layers_text(text):
+    """gid слоёв из текста tmx (для сравнений в тестах)"""
+    return [[int(v) & 0x1FFFFFFF for v in re.split(r"[,\s]+", m.strip()) if v] for m in re.findall(r'<data encoding="csv">(.*?)</data>', text, re.S)]
+
+
 def map_name(tmx):
     return tmx[len("map-"):-len(".tmx")] if tmx.startswith("map-") else tmx[:-len(".tmx")]
 
@@ -994,7 +999,7 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
         out["compact"], out["_comp"] = None, []
         if not P.get("compact") or tsf is None:
             return
-        maps = list(tmxs) + [m["tmx"] for m in all_maps(project) if m["bmp"] == os.path.basename(bmp) and m["tmx"] not in tmxs]
+        maps = maps_of_tsx(project, bmp, list(tmxs))
         info = compact_info(project, bmp, tsf, maps, set(areas_all), frm=int(P.get("compactFrom", 5)))
         rows = [] if info["errors"] else info["rows"]
         out["warnings"] += info["errors"]
@@ -1263,6 +1268,124 @@ def tmx_tilesets(project, tmx):
     return [(int(a), os.path.normpath(os.path.join(res, b))) for a, b in re.findall(r'<tileset\b[^>]*\bfirstgid="(\d+)"[^>]*\bsource="([^"]+)"', t)]
 
 
+def maps_of_tsx(project, bmp, maps=()):
+    """все карты, использующие тот же тайлсет (.tsx), что и выбранные карты или bmp: в т.ч. «replace»-карты подмены"""
+    res = stcore.paths(project)["resources"]
+    tsxs = set()
+    for f in os.listdir(res):
+        if f.endswith(".tsx"):
+            p = os.path.join(res, f)
+            m = re.search(r'<image\b[^>]*\bsource="([^"]*)"', _head(p))
+            if m and os.path.basename(m.group(1)) == os.path.basename(bmp):
+                tsxs.add(os.path.normpath(p))
+    for t in maps:
+        sets = tmx_tilesets(project, t)
+        if sets:
+            tsxs.add(sets[0][1])
+    out = list(maps)
+    for f in sorted(os.listdir(res)):
+        if f.endswith(".tmx") and f not in out:
+            sets = tmx_tilesets(project, f)
+            if any(p in tsxs for _, p in sets):
+                out.append(f)
+    return out
+
+
+def align_rows(old, new):
+    """сопоставить строки старого тайлсета (до сжатия) с новым: ячейка new либо пустая, либо равна старой.
+    -> cm: старая ячейка -> новая (None - строки больше нет)"""
+    if old.tw != new.tw:
+        raise ValueError("ширина тайлсетов разная (%d и %d)" % (old.tw, new.tw))
+    tw, n, m = old.tw, old.th, new.th
+
+    def sim(i, j):
+        sc = 0
+        for c in range(tw):
+            k = new.keys[j * tw + c]
+            if is_blank(k):
+                continue
+            if old.keys[i * tw + c] != k:
+                return None
+            sc += 1
+        return sc
+    NEG = -1e18
+    dp = [[NEG] * (m + 1) for _ in range(n + 1)]
+    bk = [[None] * (m + 1) for _ in range(n + 1)]
+    dp[0][0] = 0
+    for i in range(n + 1):
+        for j in range(m + 1):
+            v = dp[i][j]
+            if v == NEG:
+                continue
+            if i < n and v > dp[i + 1][j]:
+                dp[i + 1][j], bk[i + 1][j] = v, (i, j, "rm")
+            if j < m and v - 0.5 > dp[i][j + 1]:
+                dp[i][j + 1], bk[i][j + 1] = v - 0.5, (i, j, "ins")
+            if i < n and j < m:
+                sc = sim(i, j)
+                if sc is not None and v + sc > dp[i + 1][j + 1]:
+                    dp[i + 1][j + 1], bk[i + 1][j + 1] = v + sc, (i, j, "match")
+    cm = [None] * (n * tw)
+    i, j = n, m
+    while (i, j) != (0, 0):
+        pi, pj, op = bk[i][j]
+        if op == "match":
+            for c in range(tw):
+                cm[pi * tw + c] = pj * tw + c
+        i, j = pi, pj
+    return cm
+
+
+def repair_maps(project, here, backup, bmp, maps=None, write=False):
+    """починить индексы карт, не пересчитанных при сжатии строк: сравниваем bmp из бэкапа (старая нумерация) с текущим.
+    Карта чинится, если после пересчёта совпадает больше ячеек, чем сейчас"""
+    old, _ = load_tileset(os.path.join(here, "backups", "tilepack", backup, os.path.basename(bmp)))
+    new, _ = load_tileset(ts_path(project, bmp))
+    try:
+        with open(os.path.join(here, "backups", "tilepack", backup, "compact.json"), encoding="utf-8") as f:
+            rows = set(json.load(f)["rows"])
+        cm = row_cmap(old, rows)
+    except (OSError, ValueError, KeyError):
+        cm = align_rows(old, new)
+    res = stcore.paths(project)["resources"]
+    bdir = os.path.join(here, "backups", "tilepack", backup)
+    cand = maps_of_tsx(project, bmp, list(maps or []))
+    rep = []
+    for tmx in cand:
+        sets = tmx_tilesets(project, tmx)
+        if len(sets) != 1 or sets[0][0] != 1:
+            rep.append({"tmx": tmx, "error": "несколько тайлсетов - пропущена"})
+            continue
+        layers, _ = read_layers(os.path.join(res, tmx))
+        now = fix = tot = 0
+        for l in layers:
+            for g in l["gids"]:
+                if not g or g - 1 >= len(old.cells) or is_blank(old.keys[g - 1]):
+                    continue
+                tot += 1
+                now += g - 1 < len(new.cells) and new.keys[g - 1] == old.keys[g - 1]
+                c2 = cm[g - 1]
+                fix += c2 is not None and c2 < len(new.cells) and new.keys[c2] == old.keys[g - 1]
+        done = os.path.isfile(os.path.join(bdir, "maps", tmx))
+        rep.append({"tmx": tmx, "cells": tot, "okNow": now, "okAfter": fix, "needs": fix > now, "alreadyDone": done})
+    if write:
+        out = os.path.join(here, "backups", "tilepack", "repair_" + time.strftime("%Y%m%d_%H%M%S"))
+        os.makedirs(os.path.join(out, "maps"), exist_ok=True)
+        for r in rep:
+            if r.get("needs") and not r["alreadyDone"] and (maps is None or r["tmx"] in maps):
+                mp = os.path.join(res, r["tmx"])
+                shutil.copy2(mp, os.path.join(out, "maps", r["tmx"]))
+                with open(mp, encoding="utf-8", newline="") as f:
+                    t = remap_tmx(f.read(), cm)
+                with open(mp, "w", encoding="utf-8", newline="") as f:
+                    f.write(t)
+                r["fixed"] = True
+        r_out = out
+    else:
+        r_out = ""
+    return {"maps": rep, "backupOfFixed": r_out, "removedRows": sum(1 for r in range(old.th) if cm[r * old.tw] is None)}
+
+
 def compact_info(project, bmp, ts, maps, aset, keep_extra=(), frm=0):
     """какие строки тайлсета можно убрать и что при этом придётся переписать:
     {rows, maps, tsx, errors}. Строка убирается, если все её ячейки пустые, не нужны ни одной карте,
@@ -1438,6 +1561,8 @@ def apply(project, here, P):
                     f.write(tt)
             msgs.append("сжатие строк: убрано %d пустых строк (было %d, стало %d), экономия ROM ≈ %d байт; индексы пересчитаны в картах (%s) и .tsx (%s)"
                         % (len(rows), ts2.th, tsw.th, len(rows) * ts2.tw * 2, ", ".join(cinfo["maps"]), ", ".join(os.path.basename(p) for p in cinfo["tsx"])))
+            with open(os.path.join(bdir, "compact.json"), "w", encoding="utf-8") as f:
+                json.dump({"rows": rows, "bmp": os.path.basename(P["bmp"]), "tw": ts2.tw, "th0": ts2.th}, f)
             msgs.append("тайлы, номера которых зашиты в C++, не пересчитываются - проверьте двери и подобное вручную")
         elif (ts2.tw, ts2.th) != (ts0.tw, ts0.th):
             tp, new = update_tsx(project, P["bmp"], ts2.tw, ts2.th, os.path.basename(P.get("tsx") or "") or None)

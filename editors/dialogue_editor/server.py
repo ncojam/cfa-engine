@@ -1032,12 +1032,30 @@ def api_tp_export(body):
     return tpcore.export_tmx(CFG['project'], HERE, P)
 
 
+def api_tp_backups(bmp):
+    d = os.path.join(HERE, 'backups', 'tilepack')
+    out = []
+    for n in sorted(os.listdir(d), reverse=True) if os.path.isdir(d) else []:
+        if os.path.isfile(os.path.join(d, n, os.path.basename(bmp))):
+            out.append({"name": n, "compact": os.path.isfile(os.path.join(d, n, 'compact.json')),
+                        "maps": sorted(os.listdir(os.path.join(d, n, 'maps'))) if os.path.isdir(os.path.join(d, n, 'maps')) else []})
+    return {"backups": out}
+
+
+def api_tp_repair(body):
+    b = os.path.basename(str(body.get('backup') or ''))
+    if not b:
+        raise ValueError('не выбран бэкап')
+    return tpcore.repair_maps(CFG['project'], HERE, b, _safe_name(body.get('bmp'), '.bmp'),
+                              body.get('maps') or None, write=not body.get('dry'))
+
+
 def api_tp_bmp_png(bmp):
     b = tpcore.Bmp.load(tpcore.ts_path(CFG['project'], _safe_name(bmp, '.bmp')))
     return tpcore.write_png(b.w, b.h, b.rgb)
 
 
-TP_POST = {'scan': api_tp_scan, 'plan': api_tp_plan, 'image': api_tp_image, 'apply': api_tp_apply, 'export': api_tp_export}
+TP_POST = {'scan': api_tp_scan, 'plan': api_tp_plan, 'image': api_tp_image, 'apply': api_tp_apply, 'export': api_tp_export, 'repair': api_tp_repair}
 
 # вкладка -> (state, save): маршруты /api/<tab>/state, /api/<tab>/save
 DATA_TABS = {
@@ -1092,6 +1110,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/tilepack/state':
                 with LOCK:
                     return self._send(200, api_tp_state())
+            if path == '/api/tilepack/backups':
+                q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+                with LOCK:
+                    return self._send(200, api_tp_backups(q.get('bmp') or ''))
             if path == '/api/tilepack/bmp.png':
                 q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
                 with LOCK:
