@@ -9,7 +9,7 @@ const TPK = {
   scan: null, sel: new Set(), cellRoot: null, tsImg: null,
   pic: null, picImg: null, repl: {}, locked: new Set(), sugg: null, wantSugg: false, doAuto: false,
   auto: { existing: true, new: true }, layout: { mode: 'packed', width: 32 }, place: { mode: 'holes', row: 0, col: 0 },
-  areas: new Set(), skip: new Set(), mode1: 'del', target: { mode: 'copy', name: '', dir: 'resources/tilepack_out' },
+  areas: new Set(), skip: new Set(), compact: true, compactFrom: 5, mode1: 'del', target: { mode: 'copy', name: '', dir: 'resources/tilepack_out' },
   plan: null, pick: null, zoom: store.get('tpk.zoom', 2), showD: false, rows: 40, filter: 'all',
   export: { name: 'building', layer: 'building', outDir: 'resources/tilepack_out', tsx: '' },
   busy: false, again: false, log: [], timer: null, el: {},
@@ -74,7 +74,7 @@ function tpkLayers() {
 }
 
 function tpkPayload(withPic = true) {
-  const p = { bmp: TPK.bmp, maps: TPK.maps, layers: tpkLayers(), limit: TPK.limit, delete: [...TPK.sel], areas: [...TPK.areas], target: TPK.target, tsx: TPK.export.tsx };
+  const p = { bmp: TPK.bmp, maps: TPK.maps, layers: tpkLayers(), limit: TPK.limit, delete: [...TPK.sel], areas: [...TPK.areas], target: TPK.target, compact: TPK.compact, compactFrom: TPK.compactFrom, tsx: TPK.export.tsx };
   if (withPic && TPK.pic) {
     Object.assign(p, { img: TPK.pic.id, repl: TPK.repl, skip: [...TPK.skip], locked: [...TPK.locked], auto: TPK.auto,
       layout: TPK.layout, place: TPK.place });
@@ -250,24 +250,39 @@ function tpkRender1() {
     if (cell < 0 || cell >= sc.status.length) return;
     paint ? TPK.areas.add(cell) : TPK.areas.delete(cell);
   };
-  cv.onmousedown = ev => {
-    if (TPK.mode1 !== 'area' || TPK.pick) return;
-    const { cell } = tpkCellAt(ev, cv, TPK.zoom, sc.tw);
-    paint = !TPK.areas.has(cell); area(cell); tpkDrawSet(); ev.preventDefault();
-  };
-  window.addEventListener('mouseup', () => { if (paint !== null) { paint = null; tpkRender1Info(); tpkLater(); } });
-  cv.onclick = ev => {
-    if (TPK.mode1 === 'area' && !TPK.pick) return;
-    const { cell } = tpkCellAt(ev, cv, TPK.zoom, sc.tw);
-    if (TPK.pick) { tpkPickCell(cell); return; }
+  // ведём мышью: первая ячейка решает, выделяем или снимаем; Shift - прямоугольник от первой ячейки до текущей
+  let from = -1, snap = null;
+  const del = cell => {
     const r = TPK.cellRoot[cell];
     if (r < 0) return;
-    TPK.sel.has(r) ? TPK.sel.delete(r) : TPK.sel.add(r);
-    tpkDrawSet(); tpkRender1Info(); tpkLater();
+    paint ? TPK.sel.add(r) : TPK.sel.delete(r);
+  };
+  const rect = (a, b, f) => {
+    const x0 = Math.min(a % sc.tw, b % sc.tw), x1 = Math.max(a % sc.tw, b % sc.tw);
+    const y0 = Math.min(Math.floor(a / sc.tw), Math.floor(b / sc.tw)), y1 = Math.max(Math.floor(a / sc.tw), Math.floor(b / sc.tw));
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) f(y * sc.tw + x);
+  };
+  cv.onmousedown = ev => {
+    if (TPK.pick || ev.button !== 0) return;
+    const { cell } = tpkCellAt(ev, cv, TPK.zoom, sc.tw);
+    from = cell;
+    snap = { sel: new Set(TPK.sel), areas: new Set(TPK.areas) };
+    paint = TPK.mode1 === 'area' ? !TPK.areas.has(cell) : !TPK.sel.has(TPK.cellRoot[cell]);
+    (TPK.mode1 === 'area' ? area : del)(cell); tpkDrawSet(); ev.preventDefault();
+  };
+  window.addEventListener('mouseup', () => { if (paint !== null) { paint = null; from = -1; tpkRender1Info(); tpkRefresh(); } });
+  cv.onclick = ev => {
+    if (!TPK.pick) return;
+    tpkPickCell(tpkCellAt(ev, cv, TPK.zoom, sc.tw).cell);
   };
   cv.onmousemove = ev => {
     const { cell } = tpkCellAt(ev, cv, TPK.zoom, sc.tw); cv.title = tpkCellTitle(cell);
-    if (paint !== null && ev.buttons & 1) { area(cell); tpkDrawSet(); }
+    if (paint === null || !(ev.buttons & 1)) return;
+    if (ev.shiftKey && from >= 0) {      // прямоугольник: возвращаемся к состоянию до начала и применяем заново
+      TPK.sel = new Set(snap.sel); TPK.areas = new Set(snap.areas);
+      rect(from, cell, TPK.mode1 === 'area' ? area : del);
+    } else (TPK.mode1 === 'area' ? area : del)(cell);
+    tpkDrawSet();
   };
   TPK.el.info1 = h('div', { class: 'tp-info' });
   const zoom = h('select', { onchange: ev => { TPK.zoom = +ev.target.value; store.set('tpk.zoom', TPK.zoom); tpkDrawSet(); } },
@@ -282,10 +297,14 @@ function tpkRender1() {
       h('span', { class: 'tp-sw', style: 'background:rgba(120,120,120,.6)' }), 'не используется, но это повтор/отражение нужного - память не освободит'),
     h('div', { class: 'tp-row' },
       tpkField('Клик по таблице', h('select', { onchange: ev => { TPK.mode1 = ev.target.value; } },
-        h('option', { value: 'del', selected: TPK.mode1 === 'del' }, 'выбирает тайл на удаление (с копиями; можно и используемые)'),
+        h('option', { value: 'del', selected: TPK.mode1 === 'del' }, 'выбирает тайлы на удаление - клик или ведите мышью (Shift - прямоугольником); с копиями, можно и используемые'),
         h('option', { value: 'area', selected: TPK.mode1 === 'area' }, 'размечает область подмены (зажмите и ведите)'))),
       tpkBtn('Выделить все неиспользуемые', () => { TPK.sel = new Set(sc.unused); tpkDrawSet(); tpkRender1Info(); tpkRefresh(); }, '', 'только те, что не нужны выбранным картам'),
       tpkBtn('Области = выбранные на удаление', () => { for (const r of TPK.sel) for (const c of sc.groups[r]) TPK.areas.add(c); tpkDrawSet(); tpkRender1Info(); tpkRefresh(); }, '', 'ячейки выбранных тайлов станут областью подмены: в них можно класть новые тайлы'),
+      h('label', { class: 'tp-chk', title: 'Полностью пустые строки тайлсета убираются, нижние строки сдвигаются вверх (колонки не меняются, сборные картинки целы). Индексы в картах и .tsx пересчитываются' },
+        h('input', { type: 'checkbox', checked: TPK.compact, onchange: ev => { TPK.compact = ev.target.checked; tpkRefresh(); } }), 'подтянуть вверх пустые строки'),
+      h('label', { class: 'tp-chk', title: 'Строки выше этой не трогаем: в C++ зашиты номера ячеек (шрифт - ячейки 64-159, т.е. строки 2-4)' }, 'не трогать строки выше №',
+        h('input', { type: 'number', min: 0, value: TPK.compactFrom, style: 'width:54px', onchange: ev => { TPK.compactFrom = Math.max(0, +ev.target.value || 0); tpkRefresh(); } })),
       tpkBtn('Очистить области', () => { TPK.areas = new Set(); tpkDrawSet(); tpkRender1Info(); tpkRefresh(); }),
       tpkBtn('Снять выделение', () => { TPK.sel = new Set(); tpkDrawSet(); tpkRender1Info(); tpkRefresh(); }),
       h('label', { class: 'tp-chk' }, h('input', { type: 'checkbox', checked: TPK.showD, onchange: ev => { TPK.showD = ev.target.checked; tpkDrawSet(); } }), 'показать серые'),
@@ -302,6 +321,15 @@ function tpkCellTitle(cell) {
   return '#' + cell + ' (x' + (cell % sc.tw) + ', y' + Math.floor(cell / sc.tw) + ') - ' + what;
 }
 
+function tpkCompactText() {
+  const c = TPK.plan && TPK.plan.compact;
+  if (!TPK.compact) return '';
+  if (!c) return ' Пустые строки: считаю…';
+  if (!c.rows.length) return ' Пустых строк, которые можно убрать (ниже строки №' + c.from + '), нет.';
+  return ' После применения уйдут пустые строки №' + c.rows.join(', ') + ': тайлсет ' + c.th0 + ' → ' + c.th1 + ' строк (экономия ROM ≈ ' + c.saveRom +
+    ' байт); индексы пересчитаются в картах (' + c.maps.join(', ') + ') и .tsx (' + (c.tsx.join(', ') || 'нет') + '). Числа в C++ (дверь, шрифт) не пересчитываются.';
+}
+
 function tpkRender1Info() {
   const sc = TPK.scan;
   const cells = [...TPK.sel].reduce((a, r) => a + sc.groups[r].length, 0);
@@ -309,7 +337,7 @@ function tpkRender1Info() {
   TPK.el.info1.textContent = 'Ячеек в bmp: ' + sc.tiles.raw + ' · уникальных тайлов после сжатия (как соберёт tmx2incl): ' + sc.tiles.opt +
     ' · нужно картам: ' + sc.tiles.displayed + ' · только для подмены: ' + sc.tiles.protectedOnly + ' · не нужно никому: ' + sc.tiles.unusedClasses +
     ' · можно снести (вместе с используемыми): ' + sc.tiles.freeable + ' тайлов. Выбрано: ' + TPK.sel.size + ' тайлов (' + cells + ' ячеек). Областей подмены: ' + TPK.areas.size + ' ячеек.' + pairs +
-    ' Пары подмены пересчитываются по содержимому; новые пары создавайте вручную.';
+    ' Пары подмены пересчитываются по содержимому; новые пары создавайте вручную.' + tpkCompactText();
   if (TPK.el.applyDel) TPK.el.applyDel.disabled = !TPK.sel.size;
 }
 
@@ -518,7 +546,7 @@ function tpkRender6() {
 async function tpkApplyDelete() {
   const sc = TPK.scan, t = (TPK.plan || sc).tiles;
   const msg = 'Закрасить ' + TPK.sel.size + ' неиспользуемых тайлов (' + [...TPK.sel].reduce((a, r) => a + sc.groups[r].length, 0) + ' ячеек) маджентой в ' + TPK.bmp +
-    ' (в том числе используемых картой) и пересчитать supertiles.cpp?\nСтарые bmp и supertiles.cpp уйдут в backups/tilepack/.';
+    ' (в том числе используемых картой) и пересчитать supertiles.cpp?' + tpkCompactText() + '\nСтарые файлы (bmp, supertiles.cpp, карты и .tsx) уйдут в backups/tilepack/.';
   if (!confirm(msg)) return;
   try {
     const r = await api('/api/tilepack/apply', Object.assign(tpkPayload(false), { areas: [], target: { mode: 'main' } }));

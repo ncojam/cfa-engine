@@ -252,6 +252,27 @@ class TpCoreTest(unittest.TestCase):
         placed = [r * W + c for r, c in out["layout"]["pos"]]
         self.assertEqual(sum(1 for c in placed if c in area), 1)       # оригинал - в область, отражение - нет
 
+    def test_compact_rows_keeps_map_content(self):
+        sc = tpcore.scan(self.proj, "mts-t.bmp", ["map-t.tmx"])
+        P = {"bmp": "mts-t.bmp", "maps": ["map-t.tmx"], "delete": list(sc["unused"]), "compact": True, "compactFrom": 0}
+        out = tpcore.plan(self.proj, P)
+        rows = out["compact"]["rows"]
+        self.assertEqual(out["compact"]["th1"], out["compact"]["th0"] - len(rows))
+        res = os.path.join(self.proj, "resources", "map-t.tmx")
+        ts0, _ = tpcore.load_tileset(tpcore.ts_path(self.proj, "mts-t.bmp"))
+        L0 = [l["gids"] for l in tpcore.read_layers(res)[0]]
+        if not rows:
+            self.skipTest("в синтетике нечего сжимать")
+        tpcore.apply(self.proj, self.here, P)
+        tpcore._MAP_CACHE.clear()
+        ts1, _ = tpcore.load_tileset(tpcore.ts_path(self.proj, "mts-t.bmp"))
+        L1 = [l["gids"] for l in tpcore.read_layers(res)[0]]
+        self.assertEqual(ts1.th, ts0.th - len(rows))
+        for a, b in zip(L0, L1):
+            for x, y in zip(a, b):
+                if x and not tpcore.is_blank(ts0.keys[x - 1]):
+                    self.assertEqual(ts0.keys[x - 1], ts1.keys[y - 1])
+
     def test_png_roundtrip_and_alpha(self):
         rgb = bytes(range(0, 192)) * 1
         w, h, back, padded = tpcore.load_image_bytes(write_png(8, 8, rgb))

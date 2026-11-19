@@ -989,6 +989,19 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
     if sc["blank"] is None:
         out["warnings"].append("в тайлсете нет полностью прозрачного (маджента) тайла: удаление и пустые клетки добавят один тайл")
     out["_sc"], out["_ts0"], out["_ts1"], out["_ts2"] = sc, ts0, ts1, ts1
+
+    def do_compact(tsf):
+        out["compact"], out["_comp"] = None, []
+        if not P.get("compact") or tsf is None:
+            return
+        maps = list(tmxs) + [m["tmx"] for m in all_maps(project) if m["bmp"] == os.path.basename(bmp) and m["tmx"] not in tmxs]
+        info = compact_info(project, bmp, tsf, maps, set(areas_all), frm=int(P.get("compactFrom", 5)))
+        rows = [] if info["errors"] else info["rows"]
+        out["warnings"] += info["errors"]
+        out["compact"] = {"rows": rows, "th0": tsf.th, "th1": tsf.th - len(rows), "maps": maps,
+                          "tsx": [os.path.basename(p) for p in info["tsx"]], "saveRom": len(rows) * tsf.tw * 2, "from": int(P.get("compactFrom", 5))}
+        out["_comp"], out["_comp_info"] = rows, info
+    do_compact(ts1)
     if not P.get("img"):
         return out
     # --- шаг 3: картинка
@@ -1171,6 +1184,7 @@ def plan(project, P, images=False, auto=False, with_suggest=False):
             out["errors"].append("%d тайлов карты/картинки окажутся за пределом VRAM (%d)%s" % (len(over), limit, hint))
         if cols > PAL_MAX:
             out["errors"].append("в тайлсете получится %d цветов (максимум %d - иначе tmx2incl откажется собирать)" % (cols, PAL_MAX))
+    do_compact(ts2)
     if (P.get("target") or {}).get("mode") == "copy":      # отдельная копия: основной тайлсет не трогаем, проверки - подсказки
         out["warnings"] += [e for e in out["errors"] if e != conflict_msg]
         out["errors"] = [e for e in out["errors"] if e == conflict_msg]
@@ -1186,6 +1200,104 @@ def public(out):
 
 # ------------------------------------------------------------------ запись
 
+def _size_patch(text, tw, th):
+    new = re.sub(r'(<image\b[^>]*\bwidth=")\d+(")', lambda x: x.group(1) + str(tw * T) + x.group(2), text, count=1)
+    new = re.sub(r'(<image\b[^>]*\bheight=")\d+(")', lambda x: x.group(1) + str(th * T) + x.group(2), new, count=1)
+    return re.sub(r'(<tileset\b[^>]*\btilecount=")\d+(")', lambda x: x.group(1) + str(tw * th) + x.group(2), new, count=1)
+
+
+# ---- сжатие: убрать полностью пустые строки тайлсета, нижние сдвинуть вверх
+
+TSX_IDS = (r'(<tile\b[^>]*?\bid=")(\d+)(")', r'(\btileid=")(\d+)(")', r'(<wangcolor\b[^>]*?\btile=")(\d+)(")')
+
+
+def tsx_ids(text):
+    return {int(m.group(2)) for p in TSX_IDS for m in re.finditer(p, text)}
+
+
+def remap_tsx(text, cm):
+    for p in TSX_IDS:
+        text = re.sub(p, lambda m: m.group(1) + str(cm[int(m.group(2))] if int(m.group(2)) < len(cm) and cm[int(m.group(2))] is not None else m.group(2)) + m.group(3), text)
+    return text
+
+
+def remap_tmx(text, cm):
+    """gid первого тайлсета (firstgid=1) -> новые номера; флаги отражений сохраняются"""
+    def g(v):
+        v = int(v)
+        base = v & 0x0FFFFFFF
+        if base == 0 or base - 1 >= len(cm) or cm[base - 1] is None:
+            return str(v)
+        return str((v & ~0x0FFFFFFF) | (cm[base - 1] + 1))
+    text = re.sub(r'(<data encoding="csv">)(.*?)(</data>)', lambda m: m.group(1) + re.sub(r"\d+", lambda x: g(x.group(0)), m.group(2)) + m.group(3), text, flags=re.S)
+    return re.sub(r'(<object\b[^>]*?\bgid=")(\d+)(")', lambda m: m.group(1) + g(m.group(2)) + m.group(3), text)
+
+
+def drop_rows(ts, rows):
+    rows = set(rows)
+    tw = ts.tw
+    keep = [r for r in range(ts.th) if r not in rows]
+    return Tileset(tw, len(keep), [c for r in keep for c in ts.cells[r * tw:(r + 1) * tw]],
+                   [k for r in keep for k in ts.keys[r * tw:(r + 1) * tw]])
+
+
+def row_cmap(ts, rows):
+    """ячейка -> новая ячейка (None - строка удалена)"""
+    rows = set(rows)
+    tw, newr, out, n = ts.tw, {}, [], 0
+    for r in range(ts.th):
+        if r in rows:
+            continue
+        newr[r] = n
+        n += 1
+    for c in range(ts.tw * ts.th):
+        r = c // tw
+        out.append(newr[r] * tw + c % tw if r in newr else None)
+    return out
+
+
+def tmx_tilesets(project, tmx):
+    """[(firstgid, путь .tsx)] карты"""
+    res = stcore.paths(project)["resources"]
+    t = _head(os.path.join(res, tmx), 20000)
+    return [(int(a), os.path.normpath(os.path.join(res, b))) for a, b in re.findall(r'<tileset\b[^>]*\bfirstgid="(\d+)"[^>]*\bsource="([^"]+)"', t)]
+
+
+def compact_info(project, bmp, ts, maps, aset, keep_extra=(), frm=0):
+    """какие строки тайлсета можно убрать и что при этом придётся переписать:
+    {rows, maps, tsx, errors}. Строка убирается, если все её ячейки пустые, не нужны ни одной карте,
+    не упомянуты в .tsx (wangset'ы, свойства, анимации), не входят в области подмены и не содержат корень прозрачного тайла"""
+    errors, tsxs = [], {}
+    res = stcore.paths(project)["resources"]
+    refs = set(keep_extra)
+    for tmx in maps:
+        sets = tmx_tilesets(project, tmx)
+        if len(sets) != 1 or sets[0][0] != 1:
+            errors.append("%s: у карты %d тайлсета(ов) (нужен один с firstgid=1) - строки не сжимаю" % (tmx, len(sets)))
+            continue
+        tsxs[sets[0][1]] = True
+        layers, _ = read_layers(os.path.join(res, tmx))
+        for l in layers:
+            refs.update(g - 1 for g in l["gids"] if g)
+    for f in sorted(os.listdir(res)):
+        if f.endswith(".tsx"):
+            p = os.path.join(res, f)
+            m = re.search(r'<image\b[^>]*\bsource="([^"]*)"', _head(p))
+            if m and os.path.basename(m.group(1)) == os.path.basename(bmp):
+                tsxs.setdefault(p, True)
+    tsxs = {p: v for p, v in tsxs.items() if os.path.isfile(p)}
+    for p in tsxs:
+        with open(p, encoding="utf-8") as f:
+            refs |= tsx_ids(f.read())
+    bl = blank_class(ts)
+    rows = []
+    for r in range(max(0, frm), ts.th):
+        cells = range(r * ts.tw, (r + 1) * ts.tw)
+        if all(is_blank(ts.keys[c]) for c in cells) and not any(c in refs or c in aset or c == bl for c in cells):
+            rows.append(r)
+    return {"rows": rows, "maps": list(maps), "tsx": list(tsxs), "errors": errors}
+
+
 def update_tsx(project, bmp, tw, th, force=None, image=None, name=None):
     """размеры картинки и tilecount в .tsx, который смотрит на этот bmp -> (путь|None, новый текст);
     image/name - переписать источник картинки и имя тайлсета (для копии)"""
@@ -1198,9 +1310,7 @@ def update_tsx(project, bmp, tw, th, force=None, image=None, name=None):
             text = fh.read()
         m = re.search(r'<image\b[^>]*\bsource="([^"]*)"', text)
         if m and (f == force if force else os.path.basename(m.group(1)) == os.path.basename(bmp)):
-            new = re.sub(r'(<image\b[^>]*\bwidth=")\d+(")', lambda x: x.group(1) + str(tw * T) + x.group(2), text, count=1)
-            new = re.sub(r'(<image\b[^>]*\bheight=")\d+(")', lambda x: x.group(1) + str(th * T) + x.group(2), new, count=1)
-            new = re.sub(r'(<tileset\b[^>]*\btilecount=")\d+(")', lambda x: x.group(1) + str(tw * th) + x.group(2), new, count=1)
+            new = _size_patch(text, tw, th)
             if image:
                 new = re.sub(r'(<image\b[^>]*\bsource=")[^"]*(")', lambda x: x.group(1) + image + x.group(2), new, count=1)
             if name:
@@ -1236,8 +1346,12 @@ def apply(project, here, P):
     copy = tg.get("mode") == "copy"
     if out["errors"] and not P.get("force"):
         raise ValueError("; ".join(out["errors"]))
-    if not P.get("img") and not out["tiles"]["deleted"] and not out["tiles"]["areas"] and not copy:
+    rows = out.get("_comp") or []
+    if not P.get("img") and not out["tiles"]["deleted"] and not out["tiles"]["areas"] and not rows and not copy:
         raise ValueError("нечего применять: ничего не выбрано")
+    tsw = drop_rows(ts2, rows) if rows else ts2          # что реально пишем в bmp
+    cm = row_cmap(ts2, rows) if rows else None
+    cinfo = out.get("_comp_info") or {"maps": [], "tsx": []}
     src = ts_path(project, P["bmp"])
     _, b0 = load_tileset(src)
     text, edits, perrs = pair_edits(project, ts0, ts2, out["pairs"]) if out["pairs"] else ("", [], [])
@@ -1251,14 +1365,16 @@ def apply(project, here, P):
         name = _safe_name(tg.get("name"), os.path.splitext(os.path.basename(src))[0] + "_new")
         os.makedirs(odir, exist_ok=True)
         path = os.path.join(odir, name + ".bmp")
-        ts2.to_bmp(b0.header).save(path)
+        tsw.to_bmp(b0.header).save(path)
         msgs.append("копия тайлсета: %s (%d x %d тайлов, в сжатом наборе %d); основной %s не тронут"
-                    % (path, ts2.tw, ts2.th, ts2.count, os.path.basename(src)))
-        tp, txt = update_tsx(project, P["bmp"], ts2.tw, ts2.th, os.path.basename(P.get("tsx") or "") or None,
+                    % (path, tsw.tw, tsw.th, ts2.count, os.path.basename(src)))
+        tp, txt = update_tsx(project, P["bmp"], tsw.tw, tsw.th, os.path.basename(P.get("tsx") or "") or None,
                              image=name + ".bmp", name=name)
         if not tp:
-            txt = minimal_tsx(name, name + ".bmp", ts2.tw, ts2.th)
+            txt = minimal_tsx(name, name + ".bmp", tsw.tw, tsw.th)
             msgs.append("подходящего .tsx не нашлось - записан минимальный (без wangset и свойств)")
+        elif rows:
+            txt = remap_tsx(txt, cm)
         tsx_path = os.path.join(odir, name + ".tsx")
         with open(tsx_path, "w", encoding="utf-8", newline="") as f:
             f.write(txt)
@@ -1270,6 +1386,18 @@ def apply(project, here, P):
                         % (", ".join(str(e["idx"]) for e in edits), odir))
         for e in perrs:
             msgs.append("предупреждение: " + e)
+        if rows:
+            mdir = os.path.join(odir, "maps")
+            os.makedirs(mdir, exist_ok=True)
+            rel = os.path.relpath(tsx_path, mdir).replace("\\", "/")
+            for tmx in cinfo["maps"]:
+                with open(os.path.join(stcore.paths(project)["resources"], tmx), encoding="utf-8", newline="") as f:
+                    mt = remap_tmx(f.read(), cm)
+                mt = re.sub(r'(<tileset\b[^>]*\bsource=")[^"]*(")', lambda x: x.group(1) + rel + x.group(2), mt, count=1)
+                with open(os.path.join(mdir, tmx), "w", encoding="utf-8", newline="") as f:
+                    f.write(mt)
+            msgs.append("сжатие строк: убрано %d пустых строк (было %d, стало %d), экономия ROM ≈ %d байт; перенумерованные копии карт (%s) - в %s"
+                        % (len(rows), ts2.th, tsw.th, len(rows) * ts2.tw * 2, ", ".join(cinfo["maps"]), mdir))
         info = {"bmp": path, "tsx": tsx_path, "dir": odir, "name": name, "copy": True}
         bdir = odir
     else:
@@ -1280,15 +1408,38 @@ def apply(project, here, P):
         table = stcore.paths(project)["table"]
         if os.path.isfile(table):
             shutil.copy2(table, os.path.join(bdir, os.path.basename(table)))
-        ts2.to_bmp(b0.header).save(path)
-        msgs.append("%s записан: %d x %d тайлов, в сжатом наборе %d" % (os.path.basename(path), ts2.tw, ts2.th, ts2.count))
+        tsw.to_bmp(b0.header).save(path)
+        msgs.append("%s записан: %d x %d тайлов, в сжатом наборе %d" % (os.path.basename(path), tsw.tw, tsw.th, ts2.count))
         if edits:
             with open(table, "w", encoding="utf-8", newline="\n") as f:
                 f.write(stcore.save_table(text, edits))
             msgs.append("supertiles.cpp: пересчитаны пары %s" % ", ".join(str(e["idx"]) for e in edits))
             stcore.refresh_usage(project)
         tsx_path = ""
-        if (ts2.tw, ts2.th) != (ts0.tw, ts0.th):
+        if rows:
+            res = stcore.paths(project)["resources"]
+            os.makedirs(os.path.join(bdir, "maps"), exist_ok=True)
+            for tmx in cinfo["maps"]:
+                mp = os.path.join(res, tmx)
+                shutil.copy2(mp, os.path.join(bdir, "maps", tmx))
+                with open(mp, encoding="utf-8", newline="") as f:
+                    mt = remap_tmx(f.read(), cm)
+                with open(mp, "w", encoding="utf-8", newline="") as f:
+                    f.write(mt)
+            for tp in cinfo["tsx"]:
+                shutil.copy2(tp, os.path.join(bdir, os.path.basename(tp)))
+                with open(tp, encoding="utf-8", newline="") as f:
+                    tt = remap_tsx(f.read(), cm)
+                m = re.search(r'<image\b[^>]*\bsource="([^"]*)"', tt)
+                if m and os.path.basename(m.group(1)) == os.path.basename(P["bmp"]):
+                    tt = _size_patch(tt, tsw.tw, tsw.th)
+                    tsx_path = tsx_path or tp
+                with open(tp, "w", encoding="utf-8", newline="") as f:
+                    f.write(tt)
+            msgs.append("сжатие строк: убрано %d пустых строк (было %d, стало %d), экономия ROM ≈ %d байт; индексы пересчитаны в картах (%s) и .tsx (%s)"
+                        % (len(rows), ts2.th, tsw.th, len(rows) * ts2.tw * 2, ", ".join(cinfo["maps"]), ", ".join(os.path.basename(p) for p in cinfo["tsx"])))
+            msgs.append("тайлы, номера которых зашиты в C++, не пересчитываются - проверьте двери и подобное вручную")
+        elif (ts2.tw, ts2.th) != (ts0.tw, ts0.th):
             tp, new = update_tsx(project, P["bmp"], ts2.tw, ts2.th, os.path.basename(P.get("tsx") or "") or None)
             if tp:
                 shutil.copy2(tp, os.path.join(bdir, os.path.basename(tp)))
